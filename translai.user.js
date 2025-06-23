@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.0.4
+// @version      1.1.0
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -21,6 +21,7 @@ const Color = {
     GREEN: '#5c9c7c',
     BLUE: '#5c7c9c',
     ORANGE: '#a3754c',
+    PURPLE: '#7a5c9e',
 };
 
 const Position = {
@@ -201,6 +202,7 @@ class Chapter {
             content = content.replace(new RegExp(`(?!<span[^>]*>)${RegExp.escape(name.translated)}(?![^<]*</span>)`, 'g'), () => {
                 let color = Color.RED;
                 if (NameManager.isChild(name)) color = Color.ORANGE;
+                if (NameManager.isParent(name)) color = Color.PURPLE;
                 if (name.checked) color = Color.BLUE;
                 if (NameManager.isGlobal(name)) color = Color.GREEN;
 
