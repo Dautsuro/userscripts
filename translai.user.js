@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.0.1
+// @version      1.0.2
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -60,7 +60,7 @@ class Gemini {
             const response = await fetch(url, options);
 
             if (!response.ok) {
-                throw new Error(`Response is not OK: ${response.status} ${response.statusText ? `(${response.statusText})` : ''}`);
+                throw new Error(`Response is not OK: ${response.status} ${response.statusText ? `(${response.statusText})` : ''}\n${JSON.stringify(response)}`);
             }
 
             const data = await response.json();
