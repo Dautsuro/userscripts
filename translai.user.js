@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.1.0
+// @version      1.2.0
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -365,25 +365,38 @@ class NameManager {
 
         if (this.isChild(name) && confirm('Formatted copy?')) {
             const parentNames = this.getParentNames(name);
-            let formattedText = `${name.original}\n`;
+            let formattedText = `Chinese name: ${name.original}\n\nParent names:\n`;
 
             for (const parentName of parentNames) {
-                formattedText += `${parentName.original}: ${parentName.translated}\n`;
+                formattedText += `Chinese name: ${parentName.original}\nEnglish name:${parentName.translated}\n\n`;
             }
 
-            GM.setClipboard(formattedText, 'text/plain');
+            GM.setClipboard(formattedText.trim(), 'text/plain');
             return;
         }
 
         if (this.isParent(name) && confirm('Formatted copy?')) {
             const childNames = this.getChildNames(name);
-            let formattedText = `${name.original}\n`;
+            let formattedText = `Chinese name: ${name.original}\n\nChild names:\n`;
 
             for (const childName of childNames) {
-                formattedText += `${childName.original}: ${childName.translated}\n`;
+                formattedText += `Chinese name: ${childName.original}\nEnglish name: ${childName.translated}\n\n`;
             }
 
-            GM.setClipboard(formattedText, 'text/plain');
+            GM.setClipboard(formattedText.trim(), 'text/plain');
+            return;
+        }
+
+        const similarNames = this.getSimilarNames(name);
+
+        if (!this.isChild(name) && !this.isParent(name) && similarNames.length > 0 && confirm('Formatted copy?')) {
+            let formattedText = `Chinese name: ${name.original}\n\nSimilar names:\n`;
+
+            for (const similarName of similarNames) {
+                formattedText += `Chinese name: ${similarName.original}\nEnglish name: ${similarName.translated}\n\n`;
+            }
+
+            GM.setClipboard(formattedText.trim(), 'text/plain');
             return;
         }
 
@@ -444,6 +457,42 @@ class NameManager {
         return childNames;
     }
 
+    static getSimilarNames(name) {
+        const isSimilar = (similarLetterCount, totalLetterCount) => {
+            if ((similarLetterCount / totalLetterCount) * 100 >= 60) return true;
+            return false;
+        }
+        
+        const verifiedNames = this.getVerifiedNames();
+        const similarNames = [];
+
+        for (const verifiedName of verifiedNames) {
+            if (verifiedName.original === name.original) continue;
+
+            const nameLetters = name.original.split('');
+            const verifiedNameLetters = verifiedName.original.split('');
+
+            let similarLetterCount = 0;
+            let totalLetterCount = 0;
+
+            for (const nameLetter of nameLetters) {
+                for (const verifiedNameLetter of verifiedNameLetters) {
+                    if (nameLetter === verifiedNameLetter) {
+                        similarLetterCount++;
+                        break;
+                    }
+                }
+
+                totalLetterCount++;
+            }
+
+            if (isSimilar(similarLetterCount, totalLetterCount)) {
+                similarNames.push(verifiedName);
+            }
+        }
+
+        return similarNames;
+    }
 }
 
 class Button {
