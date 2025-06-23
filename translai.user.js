@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.0.3
+// @version      1.0.4
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -57,27 +57,34 @@ class Gemini {
                 body: JSON.stringify(payload),
             };
 
-            const response = await fetch(url, options);
+            while (true) {
+                const response = await fetch(url, options);
 
-            if (!response.ok) {
-                throw new Error(`Response is not OK: ${response.status} ${response.statusText ? `(${response.statusText})` : ''}\n${JSON.stringify(await response.json())}`);
+                if (!response.ok) {
+                    if (response.status === 503) {
+                        await sleep(5000);
+                        continue;
+                    }
+
+                    throw new Error(`Response is not OK: ${response.status} ${response.statusText ? `(${response.statusText})` : ''}\n${JSON.stringify(await response.json())}`);
+                }
+
+                const data = await response.json();
+
+                if (
+                    !data ||
+                    !data.candidates ||
+                    !data.candidates[0] ||
+                    !data.candidates[0].content ||
+                    !data.candidates[0].content.parts ||
+                    !data.candidates[0].content.parts[0] ||
+                    !data.candidates[0].content.parts[0].text
+                ) {
+                    throw new error(`Data is not OK: ${JSON.stringify(data)}`);
+                }
+
+                return data.candidates[0].content.parts[0].text;
             }
-
-            const data = await response.json();
-
-            if (
-                !data ||
-                !data.candidates ||
-                !data.candidates[0] ||
-                !data.candidates[0].content ||
-                !data.candidates[0].content.parts ||
-                !data.candidates[0].content.parts[0] ||
-                !data.candidates[0].content.parts[0].text
-            ) {
-                throw new error(`Data is not OK: ${JSON.stringify(data)}`);
-            }
-
-            return data.candidates[0].content.parts[0].text;
         } catch (error) {
             throw error;
         }
@@ -478,6 +485,10 @@ function handleError(reason, error) {
             <p>Try refreshing the page.</p>
         </div>
     `;
+}
+
+function sleep(delay) {
+    return new Promise(res => setTimeout(res, delay));
 }
 
 await Gemini.init();
