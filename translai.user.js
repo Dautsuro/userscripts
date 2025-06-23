@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.2.0
+// @version      1.3.0
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -365,10 +365,10 @@ class NameManager {
 
         if (this.isChild(name) && confirm('Formatted copy?')) {
             const parentNames = this.getParentNames(name);
-            let formattedText = `Chinese name: ${name.original}\n\nParent names:\n`;
+            let formattedText = `${name.original}\n\nParent names:\n`;
 
             for (const parentName of parentNames) {
-                formattedText += `Chinese name: ${parentName.original}\nEnglish name:${parentName.translated}\n\n`;
+                formattedText += `${parentName.original}:${parentName.translated}\n`;
             }
 
             GM.setClipboard(formattedText.trim(), 'text/plain');
@@ -377,10 +377,10 @@ class NameManager {
 
         if (this.isParent(name) && confirm('Formatted copy?')) {
             const childNames = this.getChildNames(name);
-            let formattedText = `Chinese name: ${name.original}\n\nChild names:\n`;
+            let formattedText = `${name.original}\n\nChild names:\n`;
 
             for (const childName of childNames) {
-                formattedText += `Chinese name: ${childName.original}\nEnglish name: ${childName.translated}\n\n`;
+                formattedText += `${childName.original}: ${childName.translated}\n`;
             }
 
             GM.setClipboard(formattedText.trim(), 'text/plain');
@@ -390,10 +390,10 @@ class NameManager {
         const similarNames = this.getSimilarNames(name);
 
         if (!this.isChild(name) && !this.isParent(name) && similarNames.length > 0 && confirm('Formatted copy?')) {
-            let formattedText = `Chinese name: ${name.original}\n\nSimilar names:\n`;
+            let formattedText = `${name.original}\n\nSimilar names:\n`;
 
             for (const similarName of similarNames) {
-                formattedText += `Chinese name: ${similarName.original}\nEnglish name: ${similarName.translated}\n\n`;
+                formattedText += `${similarName.original}: ${similarName.translated}\n`;
             }
 
             GM.setClipboard(formattedText.trim(), 'text/plain');
