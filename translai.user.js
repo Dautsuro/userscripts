@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.3.1
+// @version      1.3.2
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -50,7 +50,7 @@ class Gemini {
                 contents: [{ parts: [{ text: input }] }],
             };
 
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${this.apiKey}`;
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite-preview-06-17:generateContent?key=${this.apiKey}`;
 
             const options = {
                 method: 'POST',
@@ -81,7 +81,7 @@ class Gemini {
                     !data.candidates[0].content.parts[0] ||
                     !data.candidates[0].content.parts[0].text
                 ) {
-                    throw new error(`Data is not OK: ${JSON.stringify(data)}`);
+                    throw new Error(`Data is not OK: ${JSON.stringify(data)}`);
                 }
 
                 return data.candidates[0].content.parts[0].text;
@@ -189,6 +189,11 @@ class Chapter {
             NameManager.addNames(names);
             this.refreshDOM();
         } catch (error) {
+            if (error.message.includes('PROHIBITED_CONTENT')) {
+                this.refreshDOM();
+                return;
+            }
+
             handleError('Error while extracting names', error);
         }
     }
