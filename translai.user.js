@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.7.1
+// @version      1.7.2
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -404,7 +404,7 @@ class NameManager {
         let isFormatted = false;
         let refuseFormat = false;
 
-        if (this.isChild(name) && confirm('Formatted copy?')) {
+        if (this.isChild(name)) {
             if (confirm('Formatted copy?')) {
                 const parentNames = this.getParentNames(name);
                 formattedText += `Parent names:\n`;
@@ -420,28 +420,42 @@ class NameManager {
             }
         }
 
-        if (!refuseFormat && this.isParent(name) && (isFormatted || confirm('Formatted copy?'))) {
-            const childNames = this.getChildNames(name);
-            formattedText += `Child names:\n`;
+        if (!refuseFormat) {
+            if (this.isParent(name)) {
+                if (isFormatted || confirm('Formatted copy?')) {
+                    const childNames = this.getChildNames(name);
+                    formattedText += `Child names:\n`;
 
-            for (const childName of childNames) {
-                formattedText += `${childName.original}: ${childName.translated}\n`;
+                    for (const childName of childNames) {
+                        if (formattedText.includes(`\n${childName.original}:`)) continue;
+                        formattedText += `${childName.original}: ${childName.translated}\n`;
+                    }
+
+                    formattedText += '\n';
+                    isFormatted = true;
+                } else {
+                    refuseFormat = true;
+                }
             }
-
-            formattedText += '\n';
-            isFormatted = true;
         }
 
-        const similarNames = this.getSimilarNames(name);
+        if (!refuseFormat) {
+            const similarNames = this.getSimilarNames(name);
 
-        if (!refuseFormat && similarNames.length > 0 && (isFormatted || confirm('Formatted copy?'))) {
-            formattedText += `Similar names:\n`;
+            if (similarNames.length > 0) {
+                if (isFormatted || confirm('Formatted copy?')) {
+                    formattedText += `Similar names:\n`;
 
-            for (const similarName of similarNames) {
-                formattedText += `${similarName.original}: ${similarName.translated}\n`;
+                    for (const similarName of similarNames) {
+                        if (formattedText.includes(`\n${similarName.original}:`)) continue;
+                        formattedText += `${similarName.original}: ${similarName.translated}\n`;
+                    }
+
+                    isFormatted = true;
+                } else {
+                    refuseFormat = true;
+                }
             }
-
-            isFormatted = true;
         }
 
         GM.setClipboard(isFormatted ? formattedText.trim() : name.original, 'text/plain');
