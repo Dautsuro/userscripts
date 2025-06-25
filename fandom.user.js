@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fandom
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.0.0
+// @version      1.1.0
 // @description  Change the Fandom website to be easier to use with other userscripts.
 // @match        https://*.fandom.com/wiki/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=fandom.com
@@ -19,4 +19,8 @@ setInterval(() => {
     for (const expandButton of expandButtons) {
         expandButton.click();
     }
+
+    const divButtons = document.querySelectorAll('div[role="button"]');
+    const moreButton = Array.from(divButtons).filter(button => button.textContent.includes('More'))[0];
+    moreButton.click();
 }, 500);
