@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.7.2
+// @version      1.7.3
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -407,13 +407,16 @@ class NameManager {
         if (this.isChild(name)) {
             if (confirm('Formatted copy?')) {
                 const parentNames = this.getParentNames(name);
-                formattedText += `Parent names:\n`;
+                let tempFormattedText = '';
 
                 for (const parentName of parentNames) {
                     formattedText += `${parentName.original}: ${parentName.translated}\n`;
                 }
 
-                formattedText += '\n';
+                if (tempFormattedText !== '') {
+                    formattedText = `Parent names:\n${tempFormattedText}\n`;
+                }
+
                 isFormatted = true;
             } else {
                 refuseFormat = true;
@@ -424,14 +427,17 @@ class NameManager {
             if (this.isParent(name)) {
                 if (isFormatted || confirm('Formatted copy?')) {
                     const childNames = this.getChildNames(name);
-                    formattedText += `Child names:\n`;
+                    let tempFormattedText = '';
 
                     for (const childName of childNames) {
                         if (formattedText.includes(`\n${childName.original}:`)) continue;
                         formattedText += `${childName.original}: ${childName.translated}\n`;
                     }
 
-                    formattedText += '\n';
+                    if (tempFormattedText !== '') {
+                        formattedText = `Child names:\n${tempFormattedText}\n`;
+                    }
+
                     isFormatted = true;
                 } else {
                     refuseFormat = true;
@@ -444,11 +450,15 @@ class NameManager {
 
             if (similarNames.length > 0) {
                 if (isFormatted || confirm('Formatted copy?')) {
-                    formattedText += `Similar names:\n`;
+                    let tempFormattedText = '';
 
                     for (const similarName of similarNames) {
                         if (formattedText.includes(`\n${similarName.original}:`)) continue;
                         formattedText += `${similarName.original}: ${similarName.translated}\n`;
+                    }
+
+                    if (tempFormattedText !== '') {
+                        formattedText = `Similar names:\n${tempFormattedText}\n`;
                     }
 
                     isFormatted = true;
@@ -517,7 +527,7 @@ class NameManager {
 
     static getSimilarNames(name) {
         const isSimilar = (similarLetterCount, totalLetterCount) => {
-            if ((similarLetterCount / totalLetterCount) * 100 >= 60) return true;
+            if ((similarLetterCount / totalLetterCount) * 100 >= 50) return true;
             return false;
         }
         
