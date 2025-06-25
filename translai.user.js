@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.5.0
+// @version      1.5.1
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -201,6 +201,7 @@ class Chapter {
                 names = names.replace(/```json|```/g, '');
             }
 
+            if (!isParsable(names)) throw new Error(`Bad JSON: ${names}`);
             names = JSON.parse(names);
             NameManager.addNames(names);
             this.refreshDOM();
@@ -581,6 +582,15 @@ function handleError(reason, error) {
 
 function sleep(delay) {
     return new Promise(res => setTimeout(res, delay));
+}
+
+function isParsable(jsonString) {
+    try {
+        JSON.parse(jsonString);
+        return true;
+    } catch (error) {
+        return false;
+    }
 }
 
 await Gemini.init();
