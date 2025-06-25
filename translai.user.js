@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.7.0
+// @version      1.7.1
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -402,20 +402,25 @@ class NameManager {
         if (!name) return;
         let formattedText = `${name.original}\n\n`;
         let isFormatted = false;
+        let refuseFormat = false;
 
         if (this.isChild(name) && confirm('Formatted copy?')) {
-            const parentNames = this.getParentNames(name);
-            formattedText += `Parent names:\n`;
+            if (confirm('Formatted copy?')) {
+                const parentNames = this.getParentNames(name);
+                formattedText += `Parent names:\n`;
 
-            for (const parentName of parentNames) {
-                formattedText += `${parentName.original}: ${parentName.translated}\n`;
+                for (const parentName of parentNames) {
+                    formattedText += `${parentName.original}: ${parentName.translated}\n`;
+                }
+
+                formattedText += '\n';
+                isFormatted = true;
+            } else {
+                refuseFormat = true;
             }
-
-            formattedText += '\n';
-            isFormatted = true;
         }
 
-        if (this.isParent(name) && (isFormatted || confirm('Formatted copy?'))) {
+        if (!refuseFormat && this.isParent(name) && (isFormatted || confirm('Formatted copy?'))) {
             const childNames = this.getChildNames(name);
             formattedText += `Child names:\n`;
 
@@ -429,7 +434,7 @@ class NameManager {
 
         const similarNames = this.getSimilarNames(name);
 
-        if (similarNames.length > 0 && (isFormatted || confirm('Formatted copy?'))) {
+        if (!refuseFormat && similarNames.length > 0 && (isFormatted || confirm('Formatted copy?'))) {
             formattedText += `Similar names:\n`;
 
             for (const similarName of similarNames) {
