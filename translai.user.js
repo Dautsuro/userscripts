@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.7.6
+// @version      1.7.7
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -167,7 +167,7 @@ class Chapter {
             this.content = [title, ...lines].join('\n');
         }
 
-        const instruction = 'You are a professional literary translator specializing in Chinese-to-English translations of web novels. Your task is to translate the Chinese novel chapter into English. If an English name is already present in the Chinese chapter, do not change it. Put proper spacing between each paragraphs. Only output the translated chapter, do not remove the chapter title. Do not include any explanations, commentary, or additional text. If you cannot translate, respond with [UNTRANSLATABLE] and nothing else.';
+        const instruction = 'You are a professional literary translator specializing in Chinese-to-English translations of web novels. Your task is to translate the Chinese novel chapter into English. If an English name is already present in the Chinese chapter, do not change it. Put proper spacing between each paragraphs but try to not put space inside a dialog (text between ""). Only output the translated chapter, do not remove the chapter title. Do not include any explanations, commentary, or additional text. If you cannot translate, respond with [UNTRANSLATABLE] and nothing else.';
 
         let content = this.content;
         const names = NameManager.getNames();
