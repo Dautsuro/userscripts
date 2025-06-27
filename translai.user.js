@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.8.1
+// @version      1.9.0
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -252,6 +252,7 @@ class NameManager {
     static async init() {
         this.localNames = await GM.getValue(`names:${Novel.id}`, []);
         this.globalNames = await GM.getValue('names', []);
+        this.copyMessage = await GM.getValue('copyMessage', '');
     }
 
     static addNames(names) {
@@ -280,6 +281,7 @@ class NameManager {
     static save() {
         GM.setValue(`names:${Novel.id}`, this.localNames);
         GM.setValue('names', this.globalNames);
+        GM.setValue('copyMessage', this.copyMessage);
     }
 
     static isGlobal(name) {
@@ -472,7 +474,11 @@ class NameManager {
             }
         }
 
-        GM.setClipboard(isFormatted ? formattedText.trim() : name.original, 'text/plain');
+        if (this.copyMessage) {
+            formattedText = `${this.copyMessage}\n\n${formattedText}`;
+        }
+
+        GM.setClipboard(formattedText.trim(), 'text/plain');
     }
 
     static isChild(name) {
@@ -584,6 +590,14 @@ class NameManager {
 
         return similarNames;
     }
+
+    static setCopyMessage() {
+        const copyMessage = prompt('Enter your copy message')?.trim();
+        if (!copyMessage) return;
+
+        this.copyMessage = copyMessage;
+        this.save();
+    }
 }
 
 class Button {
@@ -651,6 +665,7 @@ await NameManager.init();
 
 new Button('✏️', Position.LEFT, NameManager.editName.bind(NameManager));
 new Button('➖', Position.LEFT, NameManager.removeName.bind(NameManager));
+new Button('⚙️', Position.LEFT, NameManager.setCopyMessage.bind(NameManager));
 
 new Button('➕', Position.RIGHT, NameManager.addGlobal.bind(NameManager));
 new Button('✅', Position.RIGHT, NameManager.checkName.bind(NameManager));
