@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.11.1
+// @version      1.12.0
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -246,6 +246,16 @@ class Chapter {
     static refreshDOM() {
         this.instance?.refreshDOM();
     }
+
+    static getPreviousUrl() {
+        const element = document.querySelector('.page1 > a:nth-child(1)');
+        return element.href;
+    }
+
+    static getNextUrl() {
+        const element = document.querySelector('.page1 > a:nth-child(4)');
+        return element.href;
+    }
 }
 
 class NameManager {
@@ -403,7 +413,7 @@ class NameManager {
         Chapter.refreshDOM();
     }
 
-    static copyName() {
+    static async copyName() {
         const name = this.getSelectedName();
         if (!name) return;
         let formattedText = `${name.original}\n\n`;
@@ -475,7 +485,7 @@ class NameManager {
         }
 
         if (this.copyMessage) {
-            const context = this.getContext()
+            const context = await this.getContext()
             formattedText = this.copyMessage
                 .replace('{DATA}', formattedText)
                 .replace('{CONTEXT}', context);
@@ -484,13 +494,41 @@ class NameManager {
         GM.setClipboard(formattedText.trim(), 'text/plain');
     }
 
-    static getContext() {
+    static async getContext() {
         const name = this.getSelectedName();
         if (!name) return;
 
-        const text = Chapter.instance?.content;
-        if (!text) return;
+        let prevText, nextText;
 
+        if (!prevText || !nextText) {
+            const prevUrl = Chapter.getPreviousUrl();
+            const nextUrl = Chapter.getNextUrl();
+
+            const decoder = new TextDecoder('gbk');
+            const parser = new DOMParser();
+
+            const prevPage = await fetch(prevUrl);
+            const prevBuffer = await prevPage.arrayBuffer();
+            const prevContent = decoder.decode(prevBuffer);
+
+            const nextPage = await fetch(nextUrl);
+            const nextBuffer = await nextPage.arrayBuffer();
+            const nextContent = decoder.decode(nextBuffer);
+
+            if (prevContent.includes('<div class="txtnav">')) {
+                const prevDoc = parser.parseFromString(prevContent, 'text/html');
+                const prevElement = prevDoc.querySelector('.txtnav');
+                prevText = prevElement.innerText;
+            }
+
+            if (nextContent.includes('<div class="txtnav">')) {
+                const nextDoc = parser.parseFromString(nextContent, 'text/html');
+                const nextElement = nextDoc.querySelector('.txtnav');
+                nextText = nextElement.innerText;
+            }
+        }
+
+        const text = [prevText, Chapter.instance.content, nextText].join('\n');
         const paragraphs = text.split('\n').filter(p => p.length > 0 && p.includes(name.original));
         let context = '';
         
