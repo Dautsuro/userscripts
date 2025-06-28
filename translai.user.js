@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.10.0
+// @version      1.10.1
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -411,7 +411,7 @@ class NameManager {
         let refuseFormat = false;
 
         if (this.isChild(name)) {
-            if (confirm('Formatted copy?')) {
+            if (true) {
                 const parentNames = this.getParentNames(name);
                 let tempFormattedText = '';
 
@@ -431,7 +431,7 @@ class NameManager {
 
         if (!refuseFormat) {
             if (this.isParent(name)) {
-                if (isFormatted || confirm('Formatted copy?')) {
+                if (isFormatted || true) {
                     const childNames = this.getChildNames(name);
                     let tempFormattedText = '';
 
@@ -455,7 +455,7 @@ class NameManager {
             const similarNames = this.getSimilarNames(name);
 
             if (similarNames.length > 0) {
-                if (isFormatted || confirm('Formatted copy?')) {
+                if (isFormatted || true) {
                     let tempFormattedText = '';
 
                     for (const similarName of similarNames) {
