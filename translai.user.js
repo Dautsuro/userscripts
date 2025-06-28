@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.10.1
+// @version      1.11.0
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -475,74 +475,32 @@ class NameManager {
         }
 
         if (this.copyMessage) {
-            const context = this.getParagraphsAroundSelection()
+            const context = this.getContext()
             formattedText = this.copyMessage
                 .replace('{DATA}', formattedText)
-                .replace('{CONTEXT}', `${context.prev || ''}\n${context.current}\n${context.next || ''}`);
+                .replace('{CONTEXT}', context);
             formattedText = `${this.copyMessage}\n\n${formattedText}`;
         }
 
         GM.setClipboard(formattedText.trim(), 'text/plain');
     }
 
-    static getParagraphsAroundSelection() {
-        const sel = window.getSelection();
-        if (!sel.rangeCount) return null;
+    static getContext() {
+        const name = this.getSelectedName();
+        if (!name) return;
 
-        const range = sel.getRangeAt(0);
-        const container = Chapter.instance?.element;
-        if (!container) return null;
+        const text = Chapter.instance?.content;
+        if (!text) return;
 
-        const paragraphs = [];
-        let currentNodes = [];
-
-        // Step 1: Split rendered DOM into paragraphs using <br>
-        for (let node of container.childNodes) {
-            if (node.nodeName === "BR") {
-                paragraphs.push([...currentNodes]);
-                currentNodes = [];
-            } else {
-                currentNodes.push(node);
-            }
-        }
-        if (currentNodes.length > 0) {
-            paragraphs.push(currentNodes);
-        }
-
-        // Step 2: Identify which paragraph contains the selection
-        let currentIndex = -1;
+        const paragraphs = text.split('\n').filter(p => p.length > 0 && p.includes(name.original));
+        let context = '';
+        
         for (let i = 0; i < paragraphs.length; i++) {
-            for (const node of paragraphs[i]) {
-                if (node.contains(range.startContainer) || node === range.startContainer) {
-                    currentIndex = i;
-                    break;
-                }
-            }
-            if (currentIndex !== -1) break;
+            const p = paragraphs[i];
+            context += `Context ${i+1}: ${p}\n`;
         }
 
-        if (currentIndex === -1) return null;
-
-        // Helper to convert paragraph nodes to text
-        const getTextFromNodes = (nodes) =>
-            nodes.map(n => n.textContent ?? '').join('').trim();
-
-        // Helper to find the nearest non-empty paragraph before/after
-        function findNonEmptyParagraph(start, direction) {
-            let i = start;
-            while (i >= 0 && i < paragraphs.length) {
-                const text = getTextFromNodes(paragraphs[i]);
-                if (text) return text;
-                i += direction;
-            }
-            return null;
-        }
-
-        return {
-            prev: findNonEmptyParagraph(currentIndex - 1, -1),
-            current: findNonEmptyParagraph(currentIndex, 1),
-            next: findNonEmptyParagraph(currentIndex + 1, 1),
-        };
+        return context.trim();
     }
 
     static isChild(name) {
