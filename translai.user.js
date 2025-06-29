@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.12.1
+// @version      1.13.0
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
+// @match        https://www.69shuba.com/book/*/
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=69shuba.com
 // @grant        GM.getValue
 // @grant        GM.setValue
@@ -204,6 +205,7 @@ class Chapter {
             if (!isParsable(names)) throw new Error(`Bad JSON: ${names}`);
             names = JSON.parse(names);
             NameManager.addNames(names);
+            fetchLinks();
             this.refreshDOM();
         } catch (error) {
             if (error.message.includes('PROHIBITED_CONTENT')) {
@@ -498,48 +500,13 @@ class NameManager {
         const name = this.getSelectedName();
         if (!name) return;
 
-        let prevText, nextText;
-
-        if (!prevText || !nextText) {
-            if (this.prevText && this.nextText) {
-                prevText = this.prevText;
-                nextText = this.nextText;
-            } else {
-                const prevUrl = Chapter.getPreviousUrl();
-                const nextUrl = Chapter.getNextUrl();
-
-                const decoder = new TextDecoder('gbk');
-                const parser = new DOMParser();
-
-                const prevPage = await fetch(prevUrl);
-                const prevBuffer = await prevPage.arrayBuffer();
-                const prevContent = decoder.decode(prevBuffer);
-
-                const nextPage = await fetch(nextUrl);
-                const nextBuffer = await nextPage.arrayBuffer();
-                const nextContent = decoder.decode(nextBuffer);
-
-                if (prevContent.includes('<div class="txtnav">')) {
-                    const prevDoc = parser.parseFromString(prevContent, 'text/html');
-                    const prevElement = prevDoc.querySelector('.txtnav');
-                    prevText = prevElement.innerText;
-                    this.prevText = prevText;
-                }
-
-                if (nextContent.includes('<div class="txtnav">')) {
-                    const nextDoc = parser.parseFromString(nextContent, 'text/html');
-                    const nextElement = nextDoc.querySelector('.txtnav');
-                    nextText = nextElement.innerText;
-                    this.nextText = nextText;
-                }
-            }
-        }
-
-        const text = [prevText, Chapter.instance.content, nextText].join('\n');
+        const contents = await GM.getValue(`contents:${Novel.id}`, []);
+        const text = contents.join('\n');
         const paragraphs = text.split('\n').filter(p => p.length > 0 && p.includes(name.original));
         let context = '';
         
-        for (let i = 0; i < paragraphs.length; i++) {
+        for (let i = 0; i < 60; i++) {
+            if (!paragraphs[i]) break;
             const p = paragraphs[i];
             context += `Context ${i+1}: ${p}\n`;
         }
@@ -726,6 +693,31 @@ function isParsable(jsonString) {
     }
 }
 
+async function fetchLinks() {
+    const links = await GM.getValue(`links:${Novel.id}`, []);
+    if (links.length === 0) return;
+    const link = links[0];
+
+    const pageContents = await GM.getValue(`contents:${Novel.id}`, []);
+
+    const decoder = new TextDecoder('gbk');
+    const parser = new DOMParser();
+
+    const page = await fetch(link);
+    const pageBuffer = await page.arrayBuffer();
+    const pageContent = decoder.decode(pageBuffer);
+
+    const pageDoc = parser.parseFromString(pageContent, 'text/html');
+    const pageElement = pageDoc.querySelector('.txtnav');
+    const pageText = pageElement.innerText;
+
+    links.shift();
+    await GM.setValue(`links:${Novel.id}`, links);
+    pageContents.push(pageText);
+    await GM.setValue(`contents:${Novel.id}`, pageContents);
+    setTimeout(fetchLinks, 5000);
+}
+
 await Gemini.init();
 await NameManager.init();
 
@@ -740,7 +732,7 @@ new Button('📋', Position.RIGHT, NameManager.copyName.bind(NameManager));
 
 const url = location.href;
 
-if (url.includes('/book/')) {
+if (url.includes('/book/') && url.endsWith('.htm')) {
     const titleElement = document.querySelector('.booknav2 > h1:nth-child(1) > a:nth-child(1)');
     const synopsisElement = document.querySelector('.navtxt > p:nth-child(1)');
 
@@ -754,4 +746,12 @@ if (url.includes('/book/')) {
 
     const chapter = new Chapter(chapterElement);
     chapter.translate();
+} else if (url.includes('/book/') && url.endsWith('/')) {
+    let links = await GM.getValue(`links:${Novel.id}`, null);
+
+    if (!links) {
+        links = Array.from(document.querySelectorAll('#catalog li a')).map(link => link.href);
+        links.reverse();
+        GM.setValue(`links:${Novel.id}`, links);
+    }
 }
