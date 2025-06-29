@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.13.1
+// @version      1.14.0
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -496,20 +496,32 @@ class NameManager {
         GM.setClipboard(formattedText.trim(), 'text/plain');
     }
 
-    static async getContext() {
-        const name = this.getSelectedName();
+    static async getContext(name, maxContext = 60, globalIndex = 1, parentName = null) {
+        if (!name) name = this.getSelectedName();
         if (!name) return;
 
         const contents = await GM.getValue(`contents:${Novel.id}`, []);
         const text = contents.join('\n');
-        const paragraphs = text.split('\n').filter(p => p.length > 0 && p.includes(name.original));
+        let paragraphs = text.split('\n').filter(p => p.length > 0 && p.includes(name.original));
+        if (parentName) paragraphs = paragraphs.filter(p => !p.includes(parentName));
         paragraphs.sort((a, b) => b.length - a.length);
         let context = '';
         
-        for (let i = 0; i < 60; i++) {
+        for (let i = 0; i < maxContext; i++) {
             if (!paragraphs[i]) break;
             const p = paragraphs[i];
-            context += `Context ${i+1}: ${p}\n`;
+            context += `Context ${globalIndex}: ${p}\n`;
+            globalIndex++
+        }
+
+        if (paragraphs.length < 60) {
+            const childNames = this.getChildNames(name);
+            if (childNames.length > 0) {
+                childNames.sort((a, b) => b.original.length - a.original.length);
+                const childName = childNames[0];
+                const childNameContext = await this.getContext(childName, maxContext - paragraphs.length, globalIndex, name.original);
+                context += childNameContext;
+            }
         }
 
         return context.trim();
