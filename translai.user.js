@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.12.0
+// @version      1.12.1
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -501,30 +501,37 @@ class NameManager {
         let prevText, nextText;
 
         if (!prevText || !nextText) {
-            const prevUrl = Chapter.getPreviousUrl();
-            const nextUrl = Chapter.getNextUrl();
+            if (this.prevText && this.nextText) {
+                prevText = this.prevText;
+                nextText = this.nextText;
+            } else {
+                const prevUrl = Chapter.getPreviousUrl();
+                const nextUrl = Chapter.getNextUrl();
 
-            const decoder = new TextDecoder('gbk');
-            const parser = new DOMParser();
+                const decoder = new TextDecoder('gbk');
+                const parser = new DOMParser();
 
-            const prevPage = await fetch(prevUrl);
-            const prevBuffer = await prevPage.arrayBuffer();
-            const prevContent = decoder.decode(prevBuffer);
+                const prevPage = await fetch(prevUrl);
+                const prevBuffer = await prevPage.arrayBuffer();
+                const prevContent = decoder.decode(prevBuffer);
 
-            const nextPage = await fetch(nextUrl);
-            const nextBuffer = await nextPage.arrayBuffer();
-            const nextContent = decoder.decode(nextBuffer);
+                const nextPage = await fetch(nextUrl);
+                const nextBuffer = await nextPage.arrayBuffer();
+                const nextContent = decoder.decode(nextBuffer);
 
-            if (prevContent.includes('<div class="txtnav">')) {
-                const prevDoc = parser.parseFromString(prevContent, 'text/html');
-                const prevElement = prevDoc.querySelector('.txtnav');
-                prevText = prevElement.innerText;
-            }
+                if (prevContent.includes('<div class="txtnav">')) {
+                    const prevDoc = parser.parseFromString(prevContent, 'text/html');
+                    const prevElement = prevDoc.querySelector('.txtnav');
+                    prevText = prevElement.innerText;
+                    this.prevText = prevText;
+                }
 
-            if (nextContent.includes('<div class="txtnav">')) {
-                const nextDoc = parser.parseFromString(nextContent, 'text/html');
-                const nextElement = nextDoc.querySelector('.txtnav');
-                nextText = nextElement.innerText;
+                if (nextContent.includes('<div class="txtnav">')) {
+                    const nextDoc = parser.parseFromString(nextContent, 'text/html');
+                    const nextElement = nextDoc.querySelector('.txtnav');
+                    nextText = nextElement.innerText;
+                    this.nextText = nextText;
+                }
             }
         }
 
