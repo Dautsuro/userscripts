@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.14.0
+// @version      1.15.0
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -9,6 +9,7 @@
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=69shuba.com
 // @grant        GM.getValue
 // @grant        GM.setValue
+// @grant        GM.deleteValue
 // @grant        GM.setClipboard
 // @downloadURL  https://raw.githubusercontent.com/Dautsuro/userscripts/main/translai.user.js
 // @supportURL   https://github.com/Dautsuro/userscripts/issues
@@ -737,6 +738,12 @@ await NameManager.init();
 new Button('✏️', Position.LEFT, NameManager.editName.bind(NameManager));
 new Button('➖', Position.LEFT, NameManager.removeName.bind(NameManager));
 new Button('⚙️', Position.LEFT, NameManager.setCopyMessage.bind(NameManager));
+new Button('🗑️', Position.LEFT, async () => {
+    if (confirm('Are you sure?')) {
+        await GM.deleteValue(`contents:${Novel.id}`);
+        await GM.deleteValue(`links:${Novel.id}`);
+    }
+});
 
 new Button('➕', Position.RIGHT, NameManager.addGlobal.bind(NameManager));
 new Button('✅', Position.RIGHT, NameManager.checkName.bind(NameManager));
@@ -762,7 +769,7 @@ if (url.includes('/book/') && url.endsWith('.htm')) {
 } else if (url.includes('/book/') && url.endsWith('/')) {
     let links = await GM.getValue(`links:${Novel.id}`, null);
 
-    if (!links) {
+    if (links === null) {
         links = Array.from(document.querySelectorAll('#catalog li a')).map(link => link.href);
         links.reverse();
         GM.setValue(`links:${Novel.id}`, links);
