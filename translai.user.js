@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TranslAI
 // @namespace    https://github.com/Dautsuro/userscripts
-// @version      1.17.0
+// @version      1.18.0
 // @description  TranslAI auto-translates Chinese novel chapters to English with consistent names using a built-in NameManager.
 // @match        https://www.69shuba.com/book/*.htm
 // @match        https://www.69shuba.com/txt/*/*
@@ -178,6 +178,8 @@ class Chapter {
         for (const name of names) {
             content = content.replace(new RegExp(RegExp.escape(name.original), 'g'), name.translated);
         }
+
+        content = formatNumbers(content);
 
         try {
             this.translatedContent = await Gemini.request(instruction, content);
@@ -744,6 +746,53 @@ async function fetchLinks() {
     pageContents.push(pageText);
     await GM.setValue(`contents:${Novel.id}`, pageContents);
     setTimeout(fetchLinks, 5000);
+}
+
+function formatNumbers(content) {
+    function formatLargeNumber(num) {
+        const units = [
+            { value: 1e33, label: "decillion" },
+            { value: 1e30, label: "nonillion" },
+            { value: 1e27, label: "octillion" },
+            { value: 1e24, label: "septillion" },
+            { value: 1e21, label: "sextillion" },
+            { value: 1e18, label: "quintillion" },
+            { value: 1e15, label: "quadrillion" },
+            { value: 1e12, label: "trillion" },
+            { value: 1e9, label: "billion" },
+            { value: 1e6, label: "million" },
+            { value: 1e3, label: "thousand" },
+        ];
+
+        for (const unit of units) {
+            if (num >= unit.value) {
+                return `${(num / unit.value).toFixed(2).replace(/\.00$/, '')} ${unit.label}`;
+            }
+        }
+
+        return num.toString();
+    }
+
+    const charsData = [
+        { char: '十', value: 10 },
+        { char: '百', value: 100 },
+        { char: '千', value: 1_000 },
+        { char: '万', value: 10_000 },
+        { char: '亿', value: 100_000_000 },
+        { char: '兆', value: 1_000_000_000_000 },
+    ];
+
+    for (const charData of charsData) {
+        let numbers = content.match(new RegExp(`\\d+${charData.char}`, 'g'));
+        numbers = [...new Set(numbers)];
+
+        for (const number of numbers) {
+            const num = parseFloat(number.replace(charData.char)) * charData.value;
+            content = content.replace(new RegExp(number, 'g'), formatLargeNumber(num));
+        }
+    }
+
+    return content;
 }
 
 await Gemini.init();
