@@ -12,25 +12,38 @@ In this step, read through all the provided context and write a short summary in
 
 ## Step 2: Is it a popular name?
 
-Here, determine whether the provided Chinese name refers to a popular entity—either from the real world (e.g., celebrity, brand, movie, historical figure, city, country, etc.) or from a fictional universe (e.g., *Soul Land*, *Naruto*, *One Piece*, *Marvel*, *DC*, etc.).
+Determine whether the **provided Chinese name** refers to a popular or known entity—either from the real world (e.g., celebrity, brand, movie, historical figure, city, country, etc.) or from a fictional universe (e.g., *Soul Land*, *Naruto*, *One Piece*, *Marvel*, *DC*, etc.).
 
-You have two methods for this:
+You have two methods for identifying this:
 
-1. **Check the Chinese name directly** – A direct name match may be sufficient to identify a popular entity.
-2. **Check the context** – Sometimes the name may be altered or disguised (e.g., “Tenxun” instead of “Tencent”) due to censorship or creative liberties. Use the surrounding context to detect these modified forms.
+1. **Direct name check** – Search for the exact Chinese name in known databases or sources.
+2. **Context check** – Examine the surrounding context to see if the name is used in a way that aligns with a known entity, even if slightly modified (e.g., “Tenxun” for “Tencent”).
 
-Ideally, both methods should point to the same entity, but if either one does, that is sufficient.
+However, follow these critical rules:
 
-However, follow this important rule:
+---
 
-* The English name you return must be a **literal match** to the **provided** Chinese name.
-  For example, if the full entity is 周乐乐 (*Zhou Lele*), but the provided name is just 乐乐 (*Lele*), then respond only with “Lele” — not “Zhou Lele.” [^1]
+### ⚠️ Important rules:
 
-If there's a match, respond with:
+* **Exact match required**: Only return a known entity if the **Chinese name provided** is an *exact* match (character for character) with a known entity.
+* **No guessing based on context alone**: Do **not** infer or assume the name refers to a popular entity just because the setting, genre, or narrative is similar.
+* **No full-name expansion**: If the provided name is partial (e.g. 乐乐 instead of 周乐乐), only return the part that was provided — even if the full name can be deduced from the context.
+
+---
+
+### 🛑 Override clause:
+
+> If the Chinese name does **not** *exactly match* a known entity name, **do not treat it as a match**, even if the surrounding context resembles a popular setting or story.
+
+---
+
+If you find a match (based on **exact Chinese name**), respond with:
 
 > 📗 Official name: [English name]
 
 **🛑 If a match is found, do not proceed to the next step.**
+
+If there is **no match**, move on to Step 3.
 
 ---
 
