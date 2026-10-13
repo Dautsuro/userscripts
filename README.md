@@ -25,8 +25,10 @@ Personal userscripts, written for **Violentmonkey on Firefox**.
 
 Games are expected at `C:\Games\<Game Name>\<version>\...\index.html`.
 
-**Unwatched videos** are covered by a flashing spoiler block and paused (if the game tries to play one
-that's hidden, the block covers the whole page instead). Click it to watch:
+**Unwatched videos** are covered by a flashing spoiler block and paused. The block always matches the
+video's size and scrolls with it. If the game tries to play a video that has no visible box, a small
+spoiler card appears in the bottom-right corner instead, and the rest of the page stays usable. Click
+the block or card to watch:
 
 - the video goes fullscreen, with no controls and no cursor
 - volume is forced to 100% and unmuted (the game can't turn it down)

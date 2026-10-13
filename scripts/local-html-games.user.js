@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Local HTML Games: Video Anti-Spoiler
 // @namespace    userscripts.local
-// @version      1.0.0
+// @version      1.0.1
 // @description  Hides unwatched videos in local HTML games behind an anti-spoiler block, plays them fullscreen at max volume, then loops watched videos like GIFs. Progress is saved per game and shared across versions.
 // @match        file:///C:/Games/*
 // @match        file:///c:/Games/*
@@ -121,7 +121,7 @@
 
   const OVERLAY_CSS = `
     .ov {
-      position: fixed; box-sizing: border-box; display: none; overflow: hidden;
+      position: absolute; box-sizing: border-box; display: none; overflow: hidden;
       pointer-events: auto; cursor: pointer; user-select: none; container-type: size;
       font-family: system-ui, sans-serif; color: #fff;
       background: linear-gradient(120deg, #ff0080, #ff8c00, #ffe600, #00ff95, #00c3ff, #8a2be2, #ff0080);
@@ -154,6 +154,7 @@
       border: 1px solid #fff; border-radius: 4px; opacity: .75;
     }
     .skip:hover { opacity: 1; }
+    .ov.pill { position: fixed; width: 260px; height: 90px; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,.5); }
     @keyframes lhg-shift { from { background-position: 0% 50%; } to { background-position: 100% 50%; } }
     @keyframes lhg-stripes { to { background-position: 50.9px 0; } }
     @keyframes lhg-pulse { to { transform: scale(1.08); box-shadow: 0 0 .6em #fff; } }
@@ -167,7 +168,8 @@
   function ensureHost() {
     if (!host) {
       host = document.createElement('lhg-overlays');
-      host.style.cssText = 'all: initial; position: fixed; inset: 0; pointer-events: none; z-index: 2147483647;';
+      // Absolutely positioned in the page (not fixed) so overlays scroll together with the videos.
+      host.style.cssText = 'all: initial; position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; z-index: 2147483647;';
       shadow = host.attachShadow({ mode: 'closed' });
       const style = document.createElement('style');
       style.textContent = OVERLAY_CSS;
@@ -186,7 +188,7 @@
       ov.className = 'ov';
       ov.innerHTML = `
         <div class="inner">
-          <div class="badge">⚠ SPOILER ⚠</div>
+          <div class="badge">&#9888; SPOILER &#9888;</div>
           <div class="msg"></div>
           <div class="hint"></div>
         </div>
@@ -212,26 +214,56 @@
     return cs.display !== 'none' && cs.visibility !== 'hidden' && +cs.opacity > 0;
   }
 
-  function place(v, st) {
+  // Part of the video not cut off by an ancestor that clips overflow (scroll boxes etc.).
+  function visibleArea(v, b) {
+    let x1 = b.left, y1 = b.top, x2 = b.right, y2 = b.bottom;
+    for (let el = v.parentElement; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+      const cs = getComputedStyle(el);
+      if (cs.overflowX === 'visible' && cs.overflowY === 'visible') continue;
+      const r = el.getBoundingClientRect();
+      x1 = Math.max(x1, r.left); y1 = Math.max(y1, r.top);
+      x2 = Math.min(x2, r.right); y2 = Math.min(y2, r.bottom);
+    }
+    return { x1, y1, x2, y2 };
+  }
+
+  function place(v, st, pillIndex) {
     const el = st.overlay;
-    let r = null;
-    if (v.isConnected && isRendered(v)) {
-      const b = v.getBoundingClientRect();
-      const x1 = Math.max(0, b.left), y1 = Math.max(0, b.top);
-      const x2 = Math.min(innerWidth, b.right), y2 = Math.min(innerHeight, b.bottom);
-      if (x2 - x1 >= 24 && y2 - y1 >= 24) r = { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+    const b = v.isConnected && isRendered(v) ? v.getBoundingClientRect() : null;
+
+    if (b && b.width >= 24 && b.height >= 24) {
+      // Always the video's full size (so it never resizes while scrolling),
+      // with any part hidden by a scroll box cut away by clip-path.
+      const a = visibleArea(v, b);
+      if (a.x2 - a.x1 < 1 || a.y2 - a.y1 < 1) {
+        el.style.display = 'none';
+        return false;
+      }
+      el.classList.remove('pill');
+      el.style.display = 'block';
+      const origin = host.getBoundingClientRect();
+      el.style.left = b.left - origin.left + 'px';
+      el.style.top = b.top - origin.top + 'px';
+      el.style.width = b.width + 'px';
+      el.style.height = b.height + 'px';
+      el.style.right = el.style.bottom = '';
+      el.style.clipPath = `inset(${a.y1 - b.top}px ${b.right - a.x2}px ${b.bottom - a.y2}px ${a.x1 - b.left}px)`;
+      return false;
     }
-    // The game tried to play a video that isn't (yet) visible: block the whole screen.
-    if (!r && st.wanted) r = { x: 0, y: 0, w: innerWidth, h: innerHeight };
-    if (!r) {
-      el.style.display = 'none';
-      return;
+
+    if (st.wanted) {
+      // The game tried to play a video that has no visible box (e.g. a hidden cutscene
+      // player). Show a small corner card instead of covering the page.
+      el.classList.add('pill');
+      el.style.display = 'block';
+      el.style.left = el.style.top = el.style.width = el.style.height = el.style.clipPath = '';
+      el.style.right = '16px';
+      el.style.bottom = 16 + pillIndex * 100 + 'px';
+      return true;
     }
-    el.style.display = 'block';
-    el.style.left = r.x + 'px';
-    el.style.top = r.y + 'px';
-    el.style.width = r.w + 'px';
-    el.style.height = r.h + 'px';
+
+    el.style.display = 'none';
+    return false;
   }
 
   let rafId = 0;
@@ -242,6 +274,7 @@
   function layoutTick() {
     rafId = 0;
     let any = false;
+    let pills = 0;
     for (const v of tracked) {
       const st = states.get(v);
       if (st.mode !== 'blocked') continue;
@@ -251,7 +284,7 @@
         continue;
       }
       ensureOverlay(v, st);
-      place(v, st);
+      if (place(v, st, pills)) pills++;
       any = true;
     }
     if (any) rafId = requestAnimationFrame(layoutTick);
