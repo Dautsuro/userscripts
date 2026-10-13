@@ -8,14 +8,19 @@ Personal userscripts, written for **Violentmonkey on Firefox**.
 
 ## Installing a script
 
-1. Drag the `.user.js` file into a Firefox window, Violentmonkey opens its install page.
-   If it doesn't, open the Violentmonkey dashboard, click **+ → New**, and paste the file's contents.
-2. To pick up edits, reinstall the same way (Violentmonkey replaces scripts with the same `@name` + `@namespace`).
+Open the script's raw GitHub link in Firefox and Violentmonkey shows its install page:
+
+- [local-html-games](https://raw.githubusercontent.com/Dautsuro/userscripts/main/scripts/local-html-games.user.js)
+
+Installed this way, Violentmonkey checks that link for updates on its own (or right away with
+**Check for updates** in its dashboard). It only installs an update when `@version` is higher.
 
 ## Conventions
 
 - One script per file in `scripts/`, named `<name>.user.js`.
-- Every script uses `@namespace userscripts.local` and bumps `@version` on each change.
+- Every script uses `@namespace userscripts.local` and bumps `@version` on each change
+  (otherwise Violentmonkey won't pick the change up).
+- Every script sets `@updateURL` / `@downloadURL` to its raw GitHub link on `main`.
 - Persistent data goes through `GM_getValue` / `GM_setValue` (script storage survives sessions and
   works on `file://` pages, where `localStorage` is unreliable).
 

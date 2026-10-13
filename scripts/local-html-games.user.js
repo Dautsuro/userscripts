@@ -1,8 +1,11 @@
 // ==UserScript==
 // @name         Local HTML Games: Video Anti-Spoiler
 // @namespace    userscripts.local
-// @version      1.0.2
+// @version      1.0.3
 // @description  Hides unwatched videos in local HTML games behind an anti-spoiler block, plays them fullscreen at max volume, then loops watched videos like GIFs. Progress is saved per game and shared across versions.
+// @homepageURL  https://github.com/Dautsuro/userscripts
+// @updateURL    https://raw.githubusercontent.com/Dautsuro/userscripts/main/scripts/local-html-games.user.js
+// @downloadURL  https://raw.githubusercontent.com/Dautsuro/userscripts/main/scripts/local-html-games.user.js
 // @match        file:///C:/Games/*
 // @match        file:///c:/Games/*
 // @run-at       document-start
