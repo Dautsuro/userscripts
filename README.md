@@ -35,6 +35,10 @@ the block or card to watch:
 - pressing <kbd>Esc</kbd> pauses it and brings the block back, click again to resume
 - **mark watched** (bottom-right of the block) skips it
 
+**Scroll position is kept.** When a video ends (or you leave fullscreen), the page stays where it
+was, even if the game tries to jump back to the top. This stops as soon as you scroll, click or type
+yourself, or if the game moves to a new scene (the video is removed from the page).
+
 **Watched videos** play like GIFs: muted, looping, no controls. Since a looping video never ends,
 the script sends the game one `ended` event after the first loop so cutscenes that wait for the
 video to finish still move on.

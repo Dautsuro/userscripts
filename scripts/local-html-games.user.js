@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Local HTML Games: Video Anti-Spoiler
 // @namespace    userscripts.local
-// @version      1.0.1
+// @version      1.0.2
 // @description  Hides unwatched videos in local HTML games behind an anti-spoiler block, plays them fullscreen at max volume, then loops watched videos like GIFs. Progress is saved per game and shared across versions.
 // @match        file:///C:/Games/*
 // @match        file:///c:/Games/*
@@ -374,6 +374,7 @@
     stripControls(v);
     maxVolume(v);
     if (v.ended) v.currentTime = 0;
+    st.scroll = snapshotScroll(v); // fullscreen can lose the page's scroll position
     v.requestFullscreen?.({ navigationUI: 'hide' })?.catch?.(() => {});
     v.play().catch(() => {});
   }
@@ -385,6 +386,7 @@
     st.mode = 'blocked';
     st.wanted = true;
     st.resume = true;
+    guardScroll(v, st.scroll);
     startLayoutLoop();
   }
 
@@ -394,6 +396,7 @@
     st.endedSent = true; // the game already got the real 'ended'
     v.removeAttribute('data-lhg-viewing');
     if (document.fullscreenElement === v) document.exitFullscreen().catch(() => {});
+    guardScroll(v, st.scroll);
     // Let the game's own 'ended' handlers run first.
     setTimeout(() => {
       if (st.mode === 'finishing') enterGif(v, st);
@@ -428,6 +431,63 @@
   const isVideo = (n) => n && n.localName === 'video';
 
   // ---------------------------------------------------------------------------
+  // Scroll keeping
+  // Leaving fullscreen, or the game reacting to a video ending, can throw the page
+  // back to the top. Remember where everything was scrolled and hold it there for
+  // a moment, unless the user scrolls/clicks/types or the video leaves the page
+  // (the game moved on to a new scene).
+  // ---------------------------------------------------------------------------
+
+  const GUARD_MS = 2500;
+  let guard = null;
+  let guardRaf = 0;
+
+  function snapshotScroll(v) {
+    const root = document.scrollingElement || document.documentElement;
+    const spots = [[root, root.scrollTop, root.scrollLeft]];
+    for (let el = v.parentElement; el && el !== root; el = el.parentElement) {
+      if (el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth) {
+        spots.push([el, el.scrollTop, el.scrollLeft]);
+      }
+    }
+    return spots;
+  }
+
+  function guardScroll(v, spots) {
+    if (!spots) return;
+    guard = { v, spots, until: performance.now() + GUARD_MS };
+    setTimeout(restoreScroll, 0); // right after the game's own 'ended' handlers
+    if (!guardRaf) guardRaf = requestAnimationFrame(guardTick);
+  }
+
+  // Returns false once the guard is over.
+  function restoreScroll() {
+    if (!guard) return false;
+    if (!guard.v.isConnected || performance.now() > guard.until) {
+      guard = null;
+      return false;
+    }
+    if (isVideo(document.fullscreenElement)) {
+      guard.until = performance.now() + GUARD_MS; // still leaving fullscreen
+      return true;
+    }
+    for (const [el, top, left] of guard.spots) {
+      if (el.isConnected && (Math.abs(el.scrollTop - top) > 1 || Math.abs(el.scrollLeft - left) > 1)) {
+        el.scrollTo({ top, left, behavior: 'instant' });
+      }
+    }
+    return true;
+  }
+
+  function guardTick() {
+    guardRaf = restoreScroll() ? requestAnimationFrame(guardTick) : 0;
+  }
+
+  for (const type of ['wheel', 'touchstart', 'keydown', 'mousedown']) {
+    window.addEventListener(type, () => { guard = null; }, { capture: true, passive: true });
+  }
+
+  // ---------------------------------------------------------------------------
   // Media events (they don't bubble, so listen in the capture phase)
   // ---------------------------------------------------------------------------
 
@@ -451,8 +511,11 @@
 
   document.addEventListener('ended', (e) => {
     const v = e.target;
-    const st = isVideo(v) && states.get(v);
+    if (!isVideo(v)) return;
+    const st = states.get(v);
     if (st && st.mode === 'viewing' && e.isTrusted) finishViewing(v, st);
+    // Runs before the game's own 'ended' handlers, so this is the position before any jump.
+    else guardScroll(v, snapshotScroll(v));
   }, true);
 
   document.addEventListener('volumechange', (e) => {
