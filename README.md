@@ -5,12 +5,14 @@ Personal userscripts, written for **Violentmonkey on Firefox**.
 | Script | Runs on | What it does |
 | --- | --- | --- |
 | [local-html-games](scripts/local-html-games.user.js) | `file:///C:/Games/*` | Spoiler-blocks unwatched videos in local HTML games, plays them fullscreen at max volume, then loops watched ones like GIFs |
+| [local-html-games-cheats](scripts/local-html-games-cheats.user.js) | `file:///C:/Games/*` | Finds cheat codes in a local HTML game's code (SugarCube first), activates them, and breaks hashed code checks |
 
 ## Installing a script
 
 Open the script's raw GitHub link in Firefox and Violentmonkey shows its install page:
 
 - [local-html-games](https://raw.githubusercontent.com/Dautsuro/userscripts/main/scripts/local-html-games.user.js)
+- [local-html-games-cheats](https://raw.githubusercontent.com/Dautsuro/userscripts/main/scripts/local-html-games-cheats.user.js)
 
 Installed this way, Violentmonkey checks that link for updates on its own (or right away with
 **Check for updates** in its dashboard). It only installs an update when `@version` is higher.
@@ -58,3 +60,28 @@ Limitations:
 - Videos loaded from `blob:` URLs get a new address every session, so they can't be remembered.
 - Firefox always shows its "press Esc to exit full screen" notice. You can shorten it by setting
   `full-screen-api.warning.timeout` in `about:config`.
+
+---
+
+## local-html-games-cheats
+
+A small key button sits in the bottom-left corner of every game (also in the Violentmonkey menu as
+**Find cheat codes**). Clicking it reads the game's code (every SugarCube passage, the Story
+JavaScript and inline scripts) and lists the cheat codes it finds:
+
+- **Codes compared to what you type** in a textbox/prompt: `<<if $code is "X">>`, `<<switch>>`/`<<case>>`,
+  `["A","B"].includes($code)`, JavaScript `if`/`switch`, Harlowe `(if: $code is "X")`.
+- **Encoded codes** are decoded: base64 (`btoa`/`atob`) and reversed strings.
+- **Hashed codes** (md5, sha…) can't be read, so the check is broken instead: the hash or validator
+  function is wrapped so a stand-in code like `UNLOCK1` passes it. Type that into the game's code box.
+  This lasts until the page reloads; click the button again to re-apply it.
+- **Cheat lists** like `setup.cheats = { "MONEY": … }`.
+
+Each entry shows where it was found and **What it does** (the code that runs). **Activate** runs that
+code directly through SugarCube (Twine 2 SugarCube games only), with no need to type anything.
+
+Limitations:
+
+- External `.js` files can't be read (Firefox blocks reading local files from a page), but validator
+  functions they define are still inspected when the game calls them.
+- A hash function hidden inside the game's own scope can't be wrapped; use **Activate** for those.
