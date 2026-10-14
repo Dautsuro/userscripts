@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Local HTML Games: Video Anti-Spoiler
 // @namespace    userscripts.local
-// @version      1.0.4
+// @version      1.0.5
 // @description  Hides unwatched videos in local HTML games behind an anti-spoiler block, plays them fullscreen at max volume, then loops watched videos like GIFs. Progress is saved per game and shared across versions.
 // @homepageURL  https://github.com/Dautsuro/userscripts
 // @updateURL    https://raw.githubusercontent.com/Dautsuro/userscripts/main/scripts/local-html-games.user.js
@@ -127,40 +127,37 @@
       position: absolute; box-sizing: border-box; display: none; overflow: hidden;
       pointer-events: auto; cursor: pointer; user-select: none; container-type: size;
       font-family: system-ui, sans-serif; color: #fff;
-      background: linear-gradient(120deg, #ff0080, #ff8c00, #ff0022, #00ff95, #00c3ff, #8a2be2, #ff0080);
-      background-size: 400% 400%;
-      animation: lhg-shift 5s linear infinite;
+      background: #ff0022;
       outline: 3px solid #fff; outline-offset: -3px;
-    }
-    .ov::before {
-      content: ''; position: absolute; inset: 0;
-      background: repeating-linear-gradient(45deg, rgba(0,0,0,.35) 0 18px, transparent 18px 36px);
-      background-size: 50.9px 50.9px;
-      animation: lhg-stripes 1.2s linear infinite;
     }
     .inner {
       position: absolute; inset: 0; padding: .5em;
-      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .35em;
-      text-align: center; font-size: clamp(9px, 9cqmin, 72px);
-      text-shadow: 0 2px 0 #000, 0 0 12px rgba(0,0,0,.6);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5cqmin;
+      font-size: clamp(10px, 6cqmin, 36px);
     }
-    .badge {
-      font-weight: 900; font-size: 1.6em; letter-spacing: .08em; padding: .1em .5em;
-      background: rgba(0,0,0,.55); border: .08em solid #fff; border-radius: .3em;
-      animation: lhg-pulse .9s ease-in-out infinite alternate;
+    /* The universal "this is a video" sign: a big white play button with a pulsing ring. */
+    .play {
+      width: clamp(28px, 38cqmin, 200px); aspect-ratio: 1; border-radius: 50%; flex: none;
+      background: #fff; display: grid; place-items: center;
+      animation: lhg-ring 1.4s ease-out infinite; transition: transform .15s;
     }
-    .msg { font-weight: 700; font-size: .8em; }
-    .hint { font-size: .55em; }
+    .play svg { width: 52%; height: 52%; margin-left: 9%; }
+    .ov:hover .play { transform: scale(1.07); }
+    .msg { font-weight: 800; letter-spacing: .14em; text-transform: uppercase; text-align: center; }
     .skip {
       position: absolute; right: 6px; bottom: 6px; padding: 4px 8px;
-      font: 600 11px system-ui, sans-serif; color: #fff; background: rgba(0,0,0,.65);
-      border: 1px solid #fff; border-radius: 4px; opacity: .75;
+      font: 600 11px system-ui, sans-serif; color: #fff; background: rgba(0,0,0,.35);
+      border: 1px solid rgba(255,255,255,.8); border-radius: 4px; opacity: .8;
     }
-    .skip:hover { opacity: 1; }
+    .skip:hover { opacity: 1; background: rgba(0,0,0,.55); }
     .ov.pill { position: fixed; width: 260px; height: 90px; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,.5); }
-    @keyframes lhg-shift { from { background-position: 0% 50%; } to { background-position: 100% 50%; } }
-    @keyframes lhg-stripes { to { background-position: 50.9px 0; } }
-    @keyframes lhg-pulse { to { transform: scale(1.08); box-shadow: 0 0 .6em #fff; } }
+    .ov.pill .inner { flex-direction: row; justify-content: flex-start; padding-left: 18px; gap: 14px; font-size: 13px; }
+    .ov.pill .play { width: 52px; }
+    @container (max-height: 110px) { .ov:not(.pill) .msg { display: none; } }
+    @keyframes lhg-ring {
+      from { box-shadow: 0 0 0 0 rgba(255,255,255,.8); }
+      to { box-shadow: 0 0 0 clamp(10px, 9cqmin, 50px) rgba(255,255,255,0); }
+    }
     @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
   `;
 
@@ -191,17 +188,16 @@
       ov.className = 'ov';
       ov.innerHTML = `
         <div class="inner">
-          <div class="badge">&#9888; SPOILER &#9888;</div>
+          <div class="play"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5v17L20 12z" fill="#ff0022"/></svg></div>
           <div class="msg"></div>
-          <div class="hint"></div>
         </div>
         <div class="skip" title="Mark as watched without playing it">mark watched</div>`;
       shadow.appendChild(ov);
       overlayVideo.set(ov, v);
       st.overlay = ov;
     }
-    st.overlay.querySelector('.msg').textContent = st.resume ? 'Paused' : 'Unwatched video';
-    st.overlay.querySelector('.hint').textContent = st.resume ? 'Click to resume fullscreen' : 'Click to watch fullscreen';
+    st.overlay.querySelector('.msg').textContent = st.resume ? 'Paused video' : 'Unwatched video';
+    st.overlay.title = st.resume ? 'Click to resume fullscreen' : 'Click to watch fullscreen';
   }
 
   function removeOverlay(st) {

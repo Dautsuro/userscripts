@@ -32,7 +32,7 @@ Installed this way, Violentmonkey checks that link for updates on its own (or ri
 
 Games are expected at `C:\Games\<Game Name>\<version>\...\index.html`.
 
-**Unwatched videos** are covered by a flashing spoiler block and paused. The block always matches the
+**Unwatched videos** are covered by a red block with a big pulsing play button (so it reads as "a video" at a glance) and paused. The block always matches the
 video's size and scrolls with it. If the game tries to play a video that has no visible box, a small
 spoiler card appears in the bottom-right corner instead, and the rest of the page stays usable. Click
 the block or card to watch:
