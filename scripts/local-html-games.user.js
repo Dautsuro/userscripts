@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Local HTML Games: Video Anti-Spoiler
 // @namespace    userscripts.local
-// @version      1.0.5
+// @version      1.0.6
 // @description  Hides unwatched videos in local HTML games behind an anti-spoiler block, plays them fullscreen at max volume, then loops watched videos like GIFs. Progress is saved per game and shared across versions.
 // @homepageURL  https://github.com/Dautsuro/userscripts
 // @updateURL    https://raw.githubusercontent.com/Dautsuro/userscripts/main/scripts/local-html-games.user.js
@@ -123,40 +123,60 @@
   // ---------------------------------------------------------------------------
 
   const OVERLAY_CSS = `
+    /* Frosted glass over the video (the Discord / X spoiler-cover look) with a glowing red edge. */
     .ov {
       position: absolute; box-sizing: border-box; display: none; overflow: hidden;
       pointer-events: auto; cursor: pointer; user-select: none; container-type: size;
-      font-family: system-ui, sans-serif; color: #fff;
-      background: #ff0022;
-      outline: 3px solid #fff; outline-offset: -3px;
+      font-family: system-ui, 'Segoe UI', sans-serif; color: #fff;
+      background: radial-gradient(ellipse at center, rgba(255, 30, 70, .22), transparent 70%), rgba(14, 10, 18, .5);
+      backdrop-filter: blur(40px) saturate(1.4);
+      animation: lhg-edge 2.2s ease-in-out infinite;
     }
     .inner {
       position: absolute; inset: 0; padding: .5em;
-      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5cqmin;
-      font-size: clamp(10px, 6cqmin, 36px);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4cqmin;
+      font-size: clamp(10px, 5cqmin, 26px); text-align: center;
     }
-    /* The universal "this is a video" sign: a big white play button with a pulsing ring. */
     .play {
-      width: clamp(28px, 38cqmin, 200px); aspect-ratio: 1; border-radius: 50%; flex: none;
-      background: #fff; display: grid; place-items: center;
-      animation: lhg-ring 1.4s ease-out infinite; transition: transform .15s;
+      position: relative; flex: none; display: grid; place-items: center;
+      width: clamp(30px, 30cqmin, 120px); aspect-ratio: 1; border-radius: 50%;
+      background: linear-gradient(180deg, #fff, #ececf1);
+      box-shadow: 0 6px 24px rgba(0, 0, 0, .45);
+      transition: transform .2s ease;
     }
-    .play svg { width: 52%; height: 52%; margin-left: 9%; }
-    .ov:hover .play { transform: scale(1.07); }
-    .msg { font-weight: 800; letter-spacing: .14em; text-transform: uppercase; text-align: center; }
+    .play::after {
+      content: ''; position: absolute; inset: 0; border-radius: 50%;
+      animation: lhg-ripple 2.2s ease-out infinite;
+    }
+    .play svg { width: 46%; height: 46%; margin-left: 9%; }
+    .ov:hover .play { transform: scale(1.08); }
+    .text { display: flex; flex-direction: column; align-items: center; gap: .45em; }
+    .tag {
+      font-size: .62em; font-weight: 800; letter-spacing: .18em; text-transform: uppercase;
+      padding: .3em .8em; border-radius: 999px; background: #ff1e46;
+      box-shadow: 0 0 14px rgba(255, 30, 70, .7);
+    }
+    .msg { font-weight: 600; letter-spacing: .02em; text-shadow: 0 1px 8px rgba(0, 0, 0, .6); }
     .skip {
-      position: absolute; right: 6px; bottom: 6px; padding: 4px 8px;
-      font: 600 11px system-ui, sans-serif; color: #fff; background: rgba(0,0,0,.35);
-      border: 1px solid rgba(255,255,255,.8); border-radius: 4px; opacity: .8;
+      position: absolute; right: 8px; bottom: 8px; padding: 5px 10px;
+      font: 600 11px system-ui, 'Segoe UI', sans-serif; color: rgba(255, 255, 255, .85);
+      background: rgba(255, 255, 255, .1); border: 1px solid rgba(255, 255, 255, .25); border-radius: 999px;
+      backdrop-filter: blur(6px); transition: background .15s, color .15s;
     }
-    .skip:hover { opacity: 1; background: rgba(0,0,0,.55); }
-    .ov.pill { position: fixed; width: 260px; height: 90px; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,.5); }
-    .ov.pill .inner { flex-direction: row; justify-content: flex-start; padding-left: 18px; gap: 14px; font-size: 13px; }
+    .skip:hover { color: #fff; background: rgba(255, 255, 255, .22); }
+    .ov.pill { position: fixed; width: 300px; height: 96px; border-radius: 14px; }
+    .ov.pill .skip { top: 8px; bottom: auto; }
+    .ov.pill .inner { flex-direction: row; justify-content: flex-start; padding-left: 18px; gap: 14px; font-size: 14px; }
     .ov.pill .play { width: 52px; }
-    @container (max-height: 110px) { .ov:not(.pill) .msg { display: none; } }
-    @keyframes lhg-ring {
-      from { box-shadow: 0 0 0 0 rgba(255,255,255,.8); }
-      to { box-shadow: 0 0 0 clamp(10px, 9cqmin, 50px) rgba(255,255,255,0); }
+    .ov.pill .text { align-items: flex-start; }
+    @container (max-height: 120px) { .ov:not(.pill) .text { display: none; } }
+    @keyframes lhg-edge {
+      0%, 100% { box-shadow: inset 0 0 0 2px rgba(255, 30, 70, .95), inset 0 0 18px rgba(255, 30, 70, .35); }
+      50% { box-shadow: inset 0 0 0 2px rgba(255, 70, 100, 1), inset 0 0 42px rgba(255, 30, 70, .7); }
+    }
+    @keyframes lhg-ripple {
+      from { box-shadow: 0 0 0 0 rgba(255, 255, 255, .55); }
+      to { box-shadow: 0 0 0 clamp(8px, 7cqmin, 34px) rgba(255, 255, 255, 0); }
     }
     @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
   `;
@@ -188,8 +208,8 @@
       ov.className = 'ov';
       ov.innerHTML = `
         <div class="inner">
-          <div class="play"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5v17L20 12z" fill="#ff0022"/></svg></div>
-          <div class="msg"></div>
+          <div class="play"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.2v15.6a1 1 0 0 0 1.5.86l12.6-7.8a1 1 0 0 0 0-1.72L8.5 3.34A1 1 0 0 0 7 4.2z" fill="#ff1e46"/></svg></div>
+          <div class="text"><div class="tag">Spoiler</div><div class="msg"></div></div>
         </div>
         <div class="skip" title="Mark as watched without playing it">mark watched</div>`;
       shadow.appendChild(ov);
