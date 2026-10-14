@@ -69,13 +69,14 @@ A small key button sits in the bottom-left corner of every game (also in the Vio
 **Find cheat codes**). Clicking it reads the game's code (every SugarCube passage, the Story
 JavaScript and inline scripts) and lists the cheat codes it finds:
 
-- **Codes compared to what you type** in a textbox/prompt: `<<if $code is "X">>`, `<<switch>>`/`<<case>>`,
+- **Codes compared to what you type** in a cheat textbox/prompt (its variable, passage, or target passage
+  mentions cheats or codes, so story puzzles and in-game passwords are skipped): `<<if $code is "X">>`, `<<switch>>`/`<<case>>`,
   `["A","B"].includes($code)`, JavaScript `if`/`switch`, Harlowe `(if: $code is "X")`.
 - **Encoded codes** are decoded: base64 (`btoa`/`atob`) and reversed strings.
 - **Hashed codes** (md5, sha…) can't be read, so the check is broken instead: the hash or validator
   function is wrapped so a stand-in code like `UNLOCK1` passes it. Type that into the game's code box.
   This lasts until the page reloads; click the button again to re-apply it.
-- **Cheat lists** like `setup.cheats = { "MONEY": … }`.
+- **Cheat lists** like `setup.cheats = { "MONEY": … }`, when the game looks the typed code up in them.
 
 Each entry shows where it was found and **What it does** (the code that runs). **Activate** runs that
 code directly through SugarCube (Twine 2 SugarCube games only), with no need to type anything.

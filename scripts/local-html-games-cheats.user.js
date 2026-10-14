@@ -29,12 +29,17 @@
   const OP = String.raw`===|!==|==|!=|\bis\s+not\b|\bisnot\b|\bneq\b|\bis\b|\beq\b`;
   const NEGATIVE_OP = /^(!==|!=|is\s+not|isnot|neq)$/;
 
-  // Variable names that look like they hold a cheat code.
-  const KEYWORDS = /cheat|code|password|passcode|passphrase|secret|unlock|redeem|promo/i;
+  // A text box counts as a cheat input when its variable, its passage or the passage it
+  // leads to mentions cheats/codes. Story puzzles ("$witchanswer", "$edenpassword") don't.
+  const CHEAT = /cheat|code|redeem|promo/i;
+  // Variables that hold a typed code even when the script can't see where it's typed.
+  const CODE_VAR = /(?:^|[.$_])(?:cheat_?code|cheat|code|redeem_?code|promo_?code)s?$/i;
+  // Built-in or engine functions that are never cheat validators.
+  const NOT_VALIDATOR = /^(?:isNaN|isFinite|Number|String|Boolean|parseInt|parseFloat|Array\.isArray|Object\.\w+|Math\.\w+|JSON\.\w+|visited\w*|tags|passage|previous|either|random\w*|lastVisited|hasVisited|memorize|recall|setup\.(?:is|has|can)\w*)$/;
   // Functions that transform the input before comparing (hashes, encodings).
   const HASHY = /md5|sha\d*|hash|crypt|digest|btoa|atob|encode|cipher/i;
   // Functions that probably validate a code and return true/false.
-  const VALIDATOR_NAME = /cheat|code|unlock|valid|verif|check|password|secret|redeem/i;
+  const VALIDATOR_NAME = /cheat|code|valid|verif|check|redeem/i;
   // Keyboard/HTTP codes, not cheat codes.
   const NOT_CHEAT_VAR = /(?:keyCode|charCode|statusCode|errorCode)$|(?:^|\.)(?:e|ev|evt|event|ke|key|keyEvent)\.code$/;
   const STRING_METHODS = /^(toLowerCase|toUpperCase|toLocaleLowerCase|toLocaleUpperCase|trim|trimStart|trimEnd|normalize|toString|valueOf|replace|replaceAll|split|reverse|join|slice|substring|substr)$/;
@@ -366,24 +371,34 @@
 
   function scan(sources) {
     const findings = [];
-    const inputVars = new Set();
+    const inputVars = new Map(); // variable -> names around it (its passage, the passage it leads to, prompt text)
     const numericVars = new Set();
     const hashedVars = new Map(); // "_h" -> "md5" when `_h = md5($code)`
 
-    const isRelevantVar = (v) =>
-      !!v && !NOT_CHEAT_VAR.test(v) && (inputVars.has(v) || hashedVars.has(v) || KEYWORDS.test(v));
+    const addInput = (v, ...names) => {
+      if (!inputVars.has(v)) inputVars.set(v, []);
+      inputVars.get(v).push(...names);
+    };
+
+    const isRelevantVar = (v) => {
+      if (!v || NOT_CHEAT_VAR.test(v)) return false;
+      if (hashedVars.has(v)) return true;
+      if (inputVars.has(v)) return CHEAT.test(v) || inputVars.get(v).some((n) => CHEAT.test(n));
+      return CODE_VAR.test(v);
+    };
 
     // 1. Variables the player types into.
     for (const src of sources) {
       const t = normalizeVars(src.text);
-      for (const m of t.matchAll(/<<\s*(textbox|textarea|numberbox|passwordbox|textbox2|input\w*)\s+["']([$_][\w.]+)["']/gi)) {
-        inputVars.add(m[2]);
+      for (const m of t.matchAll(/<<\s*(textbox|textarea|numberbox|passwordbox|textbox2|input\w*)\s+["']([$_][\w.]+)["']([^>]*)>>/gi)) {
+        const passages = [...m[3].matchAll(new RegExp(STR, 'g'))].map((x) => unquote(x[0]));
+        addInput(m[2], src.name, ...passages);
         if (/number/i.test(m[1])) numericVars.add(m[2]);
       }
-      for (const m of t.matchAll(/\(input-box:\s*bind\s+([$_][\w.]+)/gi)) inputVars.add(m[1]);
-      for (const m of t.matchAll(/\((?:set|put):\s*([$_][\w.]+)\s+(?:to|into)\s+\(prompt:/gi)) inputVars.add(m[1]);
-      for (const m of t.matchAll(/(?:<<set\s+)?([$_]?[A-Za-z_][\w.]*)\s*(?:=|\bto\b)\s*(?:window\.)?prompt\s*\(/g)) inputVars.add(m[1]);
-      for (const m of t.matchAll(/([$_]?[A-Za-z_][\w.]*)\s*(?:=|\bto\b)\s*(?:\$|jQuery)\([^)]*\)\s*\.val\(\)/g)) inputVars.add(m[1]);
+      for (const m of t.matchAll(/\(input-box:\s*bind\s+([$_][\w.]+)/gi)) addInput(m[1], src.name);
+      for (const m of t.matchAll(/\((?:set|put):\s*([$_][\w.]+)\s+(?:to|into)\s+\(prompt:([^)]*)/gi)) addInput(m[1], src.name, m[2]);
+      for (const m of t.matchAll(/(?:<<set\s+)?([$_]?[A-Za-z_][\w.]*)\s*(?:=|\bto\b)\s*(?:window\.)?prompt\s*\(([^)]*)/g)) addInput(m[1], src.name, m[2]);
+      for (const m of t.matchAll(/([$_]?[A-Za-z_][\w.]*)\s*(?:=|\bto\b)\s*(?:\$|jQuery)\(([^)]*)\)\s*\.val\(\)/g)) addInput(m[1], src.name, m[2]);
     }
 
     // 2. Variables holding a transformed input: `<<set _h to md5($code)>>`, `const h = sha256(code)`.
@@ -421,6 +436,21 @@
       describeLiteral(f, lit, hashFn, parsed.methods);
       add(f);
     }
+
+    // A cheat list only counts if the game looks the typed code up in it:
+    // `list[$code]`, `list.includes($code)`, `$code in list`.
+    const allCode = sources.map((s) => normalizeVars(s.text));
+    const seenLists = new Set();
+    const listIsChecked = (name) => {
+      const n = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const lookups = [
+        new RegExp(`(?<![\\w$.])${n}\\s*\\[([^\\]]+)\\]`, 'g'),
+        new RegExp(`(?<![\\w$.])${n}\\s*\\.\\s*(?:includes|contains|hasOwnProperty|indexOf|find\\w*|some|filter)\\s*\\(([^)]*)\\)`, 'g'),
+        new RegExp(`([$_]?[A-Za-z_][\\w.]*)\\s+in\\s+${n}(?![\\w$])`, 'g'),
+      ];
+      return allCode.some((t) => lookups.some((re) => [...t.matchAll(re)].some((m) =>
+        [...m[1].matchAll(/[$_]?[A-Za-z_][\w.]*/g)].some((x) => isRelevantVar(parseVarChain(x[0])?.base)))));
+    };
 
     for (const src of sources) {
       const text = src.text;
@@ -463,7 +493,7 @@
 
       scanSugarSwitches(src, isRelevantVar, add);
       scanJsSwitches(src, isRelevantVar, add);
-      scanCheatLists(src, add);
+      scanCheatLists(src, add, listIsChecked, seenLists);
       scanValidators(src, isRelevantVar, add);
     }
 
@@ -559,11 +589,14 @@
   }
 
   // `setup.cheats = { "MONEY": …, "GOD": … }` or `[{ code: "MONEY", … }]`
-  function scanCheatLists(src, add) {
+  function scanCheatLists(src, add, listIsChecked, seenLists) {
     const text = src.text;
     for (const m of text.matchAll(/([\w$.]*cheat[\w$.]*)\s*(?:=|:|\bto\b)\s*([[{])/gi)) {
       const ctx = codeContext(src, m.index);
       if (!ctx) continue;
+      const listName = normalizeVars(m[1]);
+      if (seenLists.has(listName) || !listIsChecked(listName)) continue;
+      seenLists.add(listName);
       const open = m.index + m[0].length - 1;
       const close = matchBracket(text, open);
       if (close < 0) continue;
@@ -641,6 +674,7 @@
     for (const re of patterns) {
       for (const m of text.matchAll(re)) {
         const path = m[1];
+        if (NOT_VALIDATOR.test(path)) continue;
         if (HASHY.test(path.split('.').pop()) && !VALIDATOR_NAME.test(path)) continue;
         const open = m.index + m[0].length - 1;
         const close = matchBracket(text, open);
@@ -651,7 +685,7 @@
         const args = normalizeVars(text.slice(open + 1, close)).replace(new RegExp(STR, 'g'), '""');
         const vars = [...args.matchAll(/[$_]?[A-Za-z_][\w.]*/g)].map((x) => parseVarChain(x[0])?.base).filter(Boolean);
         const relevantVar = vars.find(isRelevantVar);
-        if (!relevantVar && !(VALIDATOR_NAME.test(path) && vars.length)) continue;
+        if (!relevantVar) continue;
         const ctx = codeContext(src, m.index + m[0].length - 1);
         if (!ctx) continue;
         const negated = /(?:not\s+|!\s*)[\w$.]+\s*\($/.test(m[0]);
