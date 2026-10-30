@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.3.0
+// @version      1.4.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -224,8 +224,9 @@ ${refs}`;
       ...chips.map(chipText),
       current,
     ].filter(Boolean))].sort((a, b) => a.localeCompare(b)); // sorted so list position can't hint which one is selected
-    const hash = lastClicked?.closest('.text-patch')?.dataset.hash || '';
-    return { source, current, hash, candidates, context: contextAround(lastClicked, source, current), refs: referenceTerms(hash || source) };
+    const trigger = lastClicked?.closest('.text-patch') || null;
+    const hash = trigger?.dataset.hash || '';
+    return { source, current, hash, trigger, candidates, context: contextAround(lastClicked, source, current), refs: referenceTerms(hash || source) };
   }
 
   function scan() {
@@ -248,7 +249,7 @@ ${refs}`;
       ours.textContent = '🏆 AI Rank';
       ours.addEventListener('click', (e) => {
         e.preventDefault(); e.stopPropagation();
-        runRanking(readTooltip(root, toLabel));
+        runRanking({ ...readTooltip(root, toLabel), addBtn: btn });
       });
       btn.after(ours);
     }
@@ -407,15 +408,24 @@ ${refs}`;
     return el;
   }
 
-  function openPanel(title, onSettings) {
+  // The site's Base UI popover closes on Escape; only send it while the term's tooltip is open.
+  function closeTooltip(data) {
+    if (data.trigger?.getAttribute('aria-expanded') === 'true') {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    }
+  }
+
+  // onClose runs only when the user closes the panel (✕ or backdrop), not when code replaces it.
+  function openPanel(title, onSettings, onClose) {
     document.querySelector('.wtrrank-overlay')?.remove();
     const body = h('div', { class: 'wtrrank-body' });
-    const overlay = h('div', { class: 'wtrrank-overlay', onclick: (e) => e.target === overlay && overlay.remove() },
+    const close = () => { overlay.remove(); if (onClose) onClose(); };
+    const overlay = h('div', { class: 'wtrrank-overlay', onclick: (e) => e.target === overlay && close() },
       h('div', { class: 'wtrrank-panel', role: 'dialog', 'aria-label': title },
         h('div', { class: 'wtrrank-head' },
           h('b', {}, title),
           onSettings && h('button', { class: 'wtrrank-icon', title: 'API settings', 'aria-label': 'API settings', onclick: onSettings }, '⚙'),
-          h('button', { class: 'wtrrank-icon', title: 'Close', 'aria-label': 'Close', onclick: () => overlay.remove() }, '✕')),
+          h('button', { class: 'wtrrank-icon', title: 'Close', 'aria-label': 'Close', onclick: close }, '✕')),
         body));
     document.body.append(overlay);
     return body;
@@ -440,7 +450,12 @@ ${refs}`;
           scored && h('span', { class: 'wtrrank-score' }, `${x.score}%`)),
         scored && h('div', { class: 'wtrrank-bar' }, h('div', { style: `width:${x.score}%` })),
         h('div', { class: 'wtrrank-reason' }, x.reason));
-      const copy = () => { GM_setClipboard(x.term, 'text'); note.textContent = 'Copied'; setTimeout(() => (note.textContent = ''), 1200); };
+      // Copy, close the list, then open the site's term editor via the tooltip's "+ Term"/"Edit" button.
+      const copy = () => {
+        GM_setClipboard(x.term, 'text');
+        if (data.addBtn?.isConnected) { document.querySelector('.wtrrank-overlay')?.remove(); data.addBtn.click(); return; }
+        note.textContent = 'Copied'; setTimeout(() => (note.textContent = ''), 1200);
+      };
       row.addEventListener('click', copy);
       row.addEventListener('keydown', (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), copy()));
       body.append(row);
@@ -451,7 +466,7 @@ ${refs}`;
     // Already checked in another novel: propose that rendering instead of paying for an AI call.
     const prior = data.forceAI ? [] : priorRenderings(data.hash);
     if (prior.length) {
-      const body = openPanel(`Already checked: ${data.source || data.current}`);
+      const body = openPanel(`Already checked: ${data.source || data.current}`, null, () => closeTooltip(data));
       markChecked(data);
       renderRows(body, prior.map((term) => ({ term, reason: 'Rendering you kept after checking this term in another novel.' })), data);
       body.append(h('div', { class: 'wtrrank-actions' },
@@ -460,7 +475,7 @@ ${refs}`;
     }
     const cfg = getCfg();
     if (!cfg.key || !cfg.model) return openConfig(() => runRanking(data));
-    const body = openPanel(`Tier list: ${data.source || data.current}`, () => openConfig(() => runRanking(data)));
+    const body = openPanel(`Tier list: ${data.source || data.current}`, () => openConfig(() => runRanking(data)), () => closeTooltip(data));
     body.append(h('div', { class: 'wtrrank-muted' }, `Asking ${cfg.model}…`));
     try {
       const list = normalize(parseRanking(await chat(cfg, SYSTEM, buildPrompt(data))));
