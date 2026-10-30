@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.9.0
+// @version      1.9.1
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -685,8 +685,8 @@ Respond with JSON only: {"renderings":[{"term":string,"reason":string}]}, best f
       const w = await wikiLookup(data);
       const cfg = getCfg();
       let list = w.evident;
-      if (list.length > 2 && cfg.key && cfg.model) {
-        // Many names: let the AI pick using the novel context; keep the wiki list if it returns nothing usable.
+      if (list.length >= 2 && cfg.key && cfg.model) {
+        // Several names: let the AI pick using the novel context; keep the wiki list if it returns nothing usable.
         body.replaceChildren(h('div', { class: 'wtrrank-muted' }, `Found ${list.length} names. Asking ${cfg.model} to pick using the context…`));
         const findings = new Map(list.map((x) => [x.term, x]));
         const picked = parseRenderings(await chat(cfg, WIKI_PICK_SYSTEM, `${wikiContext(data)}WIKI FINDINGS:\n${list.map((x) => `- ${x.term}: ${x.reason}`).join('\n')}`))
