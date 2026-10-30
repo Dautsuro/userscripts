@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.6.0
+// @version      1.7.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_listValues
+// @grant        GM_deleteValue
 // @grant        GM_setClipboard
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
@@ -128,14 +130,22 @@
   }
 
   // ---------- ranking logic ----------
-  function parseRanking(text) {
+  // NEW is decided locally (term absent from the tooltip candidates, case-sensitive), not from the AI's flag,
+  // and exact duplicates are merged (scores summed, reason of the higher-scored entry kept).
+  function parseRanking(text, candidates = []) {
     const s = text.indexOf('{'), e = text.lastIndexOf('}');
     if (s < 0 || e < s) throw new Error('AI did not return JSON');
     const list = JSON.parse(text.slice(s, e + 1)).ranking;
     if (!Array.isArray(list)) throw new Error('AI JSON has no "ranking" array');
-    return list
-      .filter((x) => x && typeof x.term === 'string' && x.term.trim())
-      .map((x) => ({ term: x.term.trim(), score: Math.max(0, +x.score || 0), isNew: !!x.new, reason: String(x.reason || '') }));
+    const byTerm = new Map();
+    for (const x of list) {
+      if (!x || typeof x.term !== 'string' || !x.term.trim()) continue;
+      const term = x.term.trim(), score = Math.max(0, +x.score || 0), reason = String(x.reason || '');
+      const prev = byTerm.get(term);
+      if (!prev) byTerm.set(term, { term, score, isNew: !candidates.includes(term), reason });
+      else { if (score > prev.score) prev.reason = reason; prev.score += score; }
+    }
+    return [...byTerm.values()];
   }
 
   // Scale scores to integers summing to 100 (AI arithmetic drifts); all-zero stays all-zero.
@@ -210,7 +220,9 @@ ${refs}`;
     }).join('\n');
   }
 
-  const exactText = (root, txt) => [...root.querySelectorAll('div,span,label')].find((x) => x.textContent.trim() === txt);
+  // Innermost element whose text is exactly `txt` (its wrapper column can have the same text).
+  const exactText = (root, txt) => [...root.querySelectorAll('div,span,label')]
+    .find((x) => x.textContent.trim() === txt && ![...x.children].some((c) => c.textContent.trim() === txt));
 
   function readTooltip(root, toLabel) {
     const source = ((root.innerText || '').match(/From\s+([^\n]+)/) || [])[1]?.trim() || '';
@@ -267,13 +279,30 @@ ${refs}`;
         type: 'button', class: `${style ? style.className : ''} wtrrank-clear`,
         onclick: (e) => {
           e.preventDefault(); e.stopPropagation();
-          // Native setter + input event so React's controlled state sees the change.
-          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '');
-          input.dispatchEvent(new Event('input', { bubbles: true }));
+          setInputValue(input, '');
           input.focus();
         },
       }, '✕ Clear'));
     }
+  }
+
+  // Native setter + input event so React's controlled state sees the change.
+  function setInputValue(input, value) {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  // Wait for the site's term editor to open, then replace its Replacement Text (never saves).
+  function pasteIntoEditor(term) {
+    const started = Date.now();
+    const tick = () => {
+      const input = document.querySelector('input[placeholder="Text to replace with"]');
+      if (!input) { if (Date.now() - started < 3000) setTimeout(tick, 50); return; }
+      setInputValue(input, term);
+      // The editor may prefill after mounting; re-apply once if it overwrote us.
+      setTimeout(() => { if (input.isConnected && input.value !== term) setInputValue(input, term); }, 300);
+    };
+    tick();
   }
   let queued = false;
   new MutationObserver(() => {
@@ -416,6 +445,7 @@ ${refs}`;
     .wtrrank-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
     .wtrrank-action { background: #2f6fde; color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; font-size: 14px; cursor: pointer; }
     .wtrrank-action.secondary { background: #3a3d42; }
+    .wtrrank-action.danger { background: #b3261e; }
   `);
 
   function h(tag, props = {}, ...kids) {
@@ -474,7 +504,7 @@ ${refs}`;
       // Copy, close the list, then open the site's term editor via the tooltip's "+ Term"/"Edit" button.
       const copy = () => {
         GM_setClipboard(x.term, 'text');
-        if (data.addBtn?.isConnected) { document.querySelector('.wtrrank-overlay')?.remove(); data.addBtn.click(); return; }
+        if (data.addBtn?.isConnected) { document.querySelector('.wtrrank-overlay')?.remove(); data.addBtn.click(); pasteIntoEditor(x.term); return; }
         note.textContent = 'Copied'; setTimeout(() => (note.textContent = ''), 1200);
       };
       row.addEventListener('click', copy);
@@ -499,7 +529,7 @@ ${refs}`;
     const body = openPanel(`Tier list: ${data.source || data.current}`, () => openConfig(() => runRanking(data)), () => closeTooltip(data));
     body.append(h('div', { class: 'wtrrank-muted' }, `Asking ${cfg.model}…`));
     try {
-      const list = normalize(parseRanking(await chat(cfg, SYSTEM, buildPrompt(data))));
+      const list = normalize(parseRanking(await chat(cfg, SYSTEM, buildPrompt(data)), data.candidates));
       markChecked(data);
       renderRows(body, list, data);
     } catch (err) {
@@ -556,8 +586,19 @@ ${refs}`;
             document.querySelector('.wtrrank-overlay')?.remove();
             if (after) after();
           },
-        }, 'Save')));
+        }, 'Save')),
+      h('div', { class: 'wtrrank-actions', style: 'justify-content:flex-start;border-top:1px solid #3a3d42;padding-top:12px' },
+        h('button', { class: 'wtrrank-action danger', onclick: resetData }, 'Reset saved data')),
+      h('div', { class: 'wtrrank-muted' }, 'Deletes every checked term in all novels. Keeps the API key and model.'));
     if (cfg.key) load();
+  }
+
+  function resetData() {
+    if (!confirm('Delete all checked terms in every novel? The API key and model are kept. This cannot be undone.')) return;
+    for (const k of GM_listValues()) if (k !== 'apiKey' && k !== 'model') GM_deleteValue(k);
+    for (const k of Object.keys(checked)) delete checked[k];
+    renderTermColors();
+    document.querySelector('.wtrrank-overlay')?.remove();
   }
 
   GM_registerMenuCommand('AI Term Ranker settings', () => openConfig());
@@ -572,4 +613,6 @@ ${refs}`;
   console.assert(normalize([{ score: 1 }, { score: 1 }, { score: 1 }]).reduce((a, x) => a + x.score, 0) === 100, 'wtrrank: sum 100');
   console.assert(normalize([{ score: 0 }, { score: 0 }]).every((x) => x.score === 0), 'wtrrank: zeros');
   console.assert(parseRanking('```json\n{"ranking":[{"term":"A","score":60,"reason":"r"}]}\n```')[0].score === 60, 'wtrrank: parse');
+  const dup = parseRanking('{"ranking":[{"term":"A","score":30,"new":true,"reason":"x"},{"term":"A","score":40,"reason":"y"},{"term":"a","score":30,"new":false}]}', ['A']);
+  console.assert(dup.length === 2 && dup[0].score === 70 && dup[0].reason === 'y' && !dup[0].isNew && dup[1].isNew, 'wtrrank: merge duplicates, local NEW');
 })();
