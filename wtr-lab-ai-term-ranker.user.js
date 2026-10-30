@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.11.0
+// @version      1.12.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -310,16 +310,28 @@ ${wikiPromptSection(d.wiki)}` : ''}`;
     input.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
-  // Wait for the site's term editor to open, then replace its Replacement Text (never saves).
-  function pasteIntoEditor(term) {
+  // Wait for the site's term editor, fill Replacement Text, set the scope switch and save:
+  // wiki renderings are saved for all novels, AI/previous ones for this novel only.
+  // Save is only clicked after re-checking text and switch; otherwise the editor stays open for the user.
+  function pasteIntoEditor(term, global) {
     const started = Date.now();
     const tick = () => {
       const input = document.querySelector('input[placeholder="Text to replace with"]');
       if (!input) { if (Date.now() - started < 3000) setTimeout(tick, 50); return; }
+      const dialog = input.closest('[role="dialog"]') || input.form || document.body;
       setInputValue(input, term);
-      keepKeyboardClosed(input.closest('[role="dialog"]') || input.form || document.body);
-      // The editor may prefill after mounting; re-apply once if it overwrote us.
-      setTimeout(() => { if (input.isConnected && input.value !== term) setInputValue(input, term); }, 300);
+      keepKeyboardClosed(dialog);
+      const scopeLabel = () => dialog.querySelector('label[for="global-switch"]');
+      const isGlobal = () => scopeLabel()?.textContent.trim() === 'All Novels';
+      setTimeout(() => {
+        // The editor may prefill after mounting; re-apply if it overwrote us.
+        if (input.isConnected && input.value !== term) setInputValue(input, term);
+        if (scopeLabel() && isGlobal() !== global) (dialog.querySelector('#global-switch') || scopeLabel()).click();
+        setTimeout(() => {
+          const save = [...dialog.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Save');
+          if (input.isConnected && input.value === term && scopeLabel() && isGlobal() === global && save) save.click();
+        }, 200);
+      }, 300);
     };
     tick();
   }
@@ -501,7 +513,8 @@ ${wikiPromptSection(d.wiki)}` : ''}`;
   // Rows for the result panel; items without a score (prior renderings) get no % or bar.
   const ORIGINS = { wiki: ['WIKI', 'Found on the fandom wiki'], ai: ['AI', 'Ranked by the AI'], prior: ['PREVIOUS', 'Kept in another novel'] };
   function renderRows(body, list, data) {
-    body.replaceChildren(h('div', { class: 'wtrrank-muted', style: 'margin-bottom:8px' }, 'Tap a term to copy it.'));
+    body.replaceChildren(h('div', { class: 'wtrrank-muted', style: 'margin-bottom:8px' },
+      data.addBtn ? 'Tap a term to save it (WIKI → all novels, otherwise this novel only).' : 'Tap a term to copy it.'));
     list.forEach((x, i) => {
       const scored = typeof x.score === 'number';
       const note = h('span', { class: 'wtrrank-copied' });
@@ -517,10 +530,10 @@ ${wikiPromptSection(d.wiki)}` : ''}`;
         scored && h('div', { class: 'wtrrank-bar' }, h('div', { style: `width:${x.score}%` })),
         h('div', { class: 'wtrrank-reason' }, x.reason,
           x.url && h('a', { href: x.url, target: '_blank', rel: 'noopener', style: 'margin-left:6px;color:#7aa7ff', onclick: (e) => e.stopPropagation() }, 'open page')));
-      // Copy, close the list, then open the site's term editor via the tooltip's "+ Term"/"Edit" button.
+      // Copy, close the list, then open the site's term editor via the tooltip's "+ Term"/"Edit" button and save.
       const copy = () => {
         GM_setClipboard(x.term, 'text');
-        if (data.addBtn?.isConnected) { document.querySelector('.wtrrank-overlay')?.remove(); data.addBtn.click(); pasteIntoEditor(x.term); return; }
+        if (data.addBtn?.isConnected) { document.querySelector('.wtrrank-overlay')?.remove(); data.addBtn.click(); pasteIntoEditor(x.term, x.origin === 'wiki'); return; }
         note.textContent = 'Copied'; setTimeout(() => (note.textContent = ''), 1200);
       };
       row.addEventListener('click', copy);
