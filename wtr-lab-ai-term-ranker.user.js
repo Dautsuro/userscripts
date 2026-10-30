@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.9.1
+// @version      1.9.2
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -658,12 +658,9 @@ Respond with JSON only: {"renderings":[{"term":string,"page":string,"reason":str
 - Give the singular base form (the reader adds plural "s" itself).
 - "reason": one short sentence quoting the evidence.`;
 
-  const WIKI_PICK_SYSTEM = `Several English names were found on a franchise fan wiki for one Chinese term. Using the novel CONTEXT, decide which of them correctly render the term here.
-Respond with JSON only: {"renderings":[{"term":string,"reason":string}]}, best first.
-- Only use names from WIKI FINDINGS (you may reduce one to its singular base form; the reader adds plural "s" itself).
-- Drop names that refer to a different thing than the source term in this context.
-- When several are valid, prefer the one used most often on the wiki.
-- "reason": one short sentence.`;
+  // AI Rank's rules, restricted to the names found on the wiki.
+  const WIKI_RANK_SYSTEM = `${SYSTEM}
+- Wiki mode: every CANDIDATE was found on the franchise fan wiki (see WIKI EVIDENCE). Rank only these candidates; do not add new terms, except reducing a candidate to its singular base form. A candidate that names a different thing than the source term in this CONTEXT gets 0.`;
 
   const wikiContext = (data) => `NOVEL: ${data.novel || '(unknown)'}\nSOURCE TERM: ${data.source}\n\nCONTEXT:\n${data.context || '(none)'}\n\n`;
   function parseRenderings(text) {
@@ -684,17 +681,20 @@ Respond with JSON only: {"renderings":[{"term":string,"reason":string}]}, best f
     try {
       const w = await wikiLookup(data);
       const cfg = getCfg();
-      let list = w.evident;
+      let list = w.evident, note = null;
       if (list.length >= 2 && cfg.key && cfg.model) {
-        // Several names: let the AI pick using the novel context; keep the wiki list if it returns nothing usable.
-        body.replaceChildren(h('div', { class: 'wtrrank-muted' }, `Found ${list.length} names. Asking ${cfg.model} to pick using the context…`));
+        // Several names: scored tier list like AI Rank, but only among the wiki names.
+        body.replaceChildren(h('div', { class: 'wtrrank-muted' }, `Found ${list.length} names on the wiki. Asking ${cfg.model} to rank them…`));
+        const names = list.map((x) => x.term);
         const findings = new Map(list.map((x) => [x.term, x]));
-        const picked = parseRenderings(await chat(cfg, WIKI_PICK_SYSTEM, `${wikiContext(data)}WIKI FINDINGS:\n${list.map((x) => `- ${x.term}: ${x.reason}`).join('\n')}`))
-          .map((p) => {
-            const f = findings.get(p.term) || findings.get(`${p.term}s`);
-            return { term: p.term, url: f?.url, reason: f ? `${p.reason} (${f.reason})` : p.reason };
-          });
-        if (picked.length) list = picked;
+        try {
+          // Drop anything the AI invented anyway; a singular form of a wiki name is allowed.
+          const ranked = normalize(parseRanking(await chat(cfg, WIKI_RANK_SYSTEM, buildPrompt({ ...data, candidates: names, wiki: w })), names)
+            .filter((x) => findings.has(x.term) || findings.has(`${x.term}s`)));
+          if (ranked.length) list = ranked.map((x) => ({ ...x, url: (findings.get(x.term) || findings.get(`${x.term}s`))?.url }));
+        } catch (err) {
+          note = h('div', { class: 'wtrrank-err', style: 'margin-bottom:8px' }, `AI ranking failed (${err.message || err}); showing the wiki list.`);
+        }
       } else if (!list.length && w.excerpts.length) {
         if (!cfg.key || !cfg.model) throw new Error('Nothing evident on the wiki, and no AI is configured to read the pages.');
         body.replaceChildren(h('div', { class: 'wtrrank-muted' }, `Nothing evident. Asking ${cfg.model} to read ${w.excerpts.length} excerpts…`));
@@ -704,6 +704,7 @@ Respond with JSON only: {"renderings":[{"term":string,"reason":string}]}, best f
       if (!list.length) { body.replaceChildren(h('div', { class: 'wtrrank-muted' }, 'Nothing found on the wiki for this term.'), askAiButton(data)); return; }
       markChecked(data);
       renderRows(body, list, data);
+      if (note) body.prepend(note);
     } catch (err) {
       body.replaceChildren(h('div', { class: 'wtrrank-err' }, String(err.message || err)), askAiButton(data));
     }
