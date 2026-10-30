@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.5.0
+// @version      1.6.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -165,14 +165,17 @@ Rules:
 - You are not limited to the listed candidates. If a better or competitive rendering exists, add it with "new": true and score it by exactly the same standard as listed ones.
 - Include every listed candidate exactly as written (with "new": false).
 - Consistency: REFERENCE TERMS are related terms the user already verified; they define the naming conventions to follow (how names, titles, ranks, sects, techniques and shared characters are rendered). Other translated terms that appear in the CONTEXT but are not in REFERENCE TERMS are unverified machine output and must have NO weight in your decision.
-- Judge accuracy to the source meaning, fit with the context, consistency with REFERENCE TERMS, and naturalness in English.
+- Base form only: the chosen term is substituted verbatim everywhere the source appears, and the site itself appends "s" in plural sentences. So the term must be the singular, uninflected base form, independent of whether the CONTEXT sentence is singular or plural. A pluralized or inflected candidate (e.g. "Soul Rings" for 魂环) is wrong: it would produce "Soul Ringss". Score such candidates 0 unless the name is inherently plural. Use the CONTEXT only to understand the meaning, never to pick grammatical number.
+- Official renderings: if the NOVEL belongs to or is fan-fiction of a known franchise (e.g. Soul Land / Douluo Dalu) and the term has an established official or widely accepted English rendering in that franchise, rank that rendering first, even above a more accurate or natural one, and say so in the reason. Add it with "new": true if it is not listed. Apply this only when you are confident the rendering is established; never invent one.
+- Otherwise judge accuracy to the source meaning, fit with the context, consistency with REFERENCE TERMS, and naturalness in English.
 - "reason": one short sentence explaining why this term got this position and score.
 - Order the array from highest to lowest score.`;
 
   function buildPrompt(d) {
     const refs = d.refs.length ? d.refs.map((t) => `${t.from} → ${t.to}`).join('\n') : '(none)';
     // d.current is deliberately not sent: knowing the selected term would bias the AI towards it.
-    return `SOURCE TERM: ${d.source || '(unknown)'}
+    return `NOVEL: ${d.novel || '(unknown)'}
+SOURCE TERM: ${d.source || '(unknown)'}
 
 CANDIDATES:
 ${d.candidates.map((c) => `- ${c}`).join('\n') || '(none, propose your own)'}
@@ -226,7 +229,8 @@ ${refs}`;
     ].filter(Boolean))].sort((a, b) => a.localeCompare(b)); // sorted so list position can't hint which one is selected
     const trigger = lastClicked?.closest('.text-patch') || null;
     const hash = trigger?.dataset.hash || '';
-    return { source, current, hash, trigger, candidates, context: contextAround(lastClicked, source, current), refs: referenceTerms(hash || source) };
+    const novel = document.title.replace(/\s+Chapter\s+\d+.*$/i, '').replace(/(^|\s*-\s*)WTR-LAB\s*$/i, '').trim(); // franchise hint for official renderings
+    return { source, current, hash, trigger, novel, candidates, context: contextAround(lastClicked, source, current), refs: referenceTerms(hash || source) };
   }
 
   function scan() {
