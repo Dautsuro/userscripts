@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.4.0
+// @version      1.5.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -252,6 +252,23 @@ ${refs}`;
         runRanking({ ...readTooltip(root, toLabel), addBtn: btn });
       });
       btn.after(ours);
+    }
+
+    // Term editor: "Clear" button next to the Replacement Text label (deleting text is tedious on mobile).
+    for (const input of document.querySelectorAll('input[placeholder="Text to replace with"]')) {
+      const label = input.parentElement?.querySelector('label');
+      if (!label || label.querySelector('.wtrrank-clear')) continue;
+      const style = input.closest('form')?.querySelector('button[type="button"]'); // "+ Variation", for the site's look
+      label.append(h('button', {
+        type: 'button', class: `${style ? style.className : ''} wtrrank-clear`,
+        onclick: (e) => {
+          e.preventDefault(); e.stopPropagation();
+          // Native setter + input event so React's controlled state sees the change.
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '');
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.focus();
+        },
+      }, '✕ Clear'));
     }
   }
   let queued = false;
