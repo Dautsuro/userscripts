@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.9.2
+// @version      1.10.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -277,7 +277,13 @@ ${wikiPromptSection(d.wiki)}` : ''}`;
         e.preventDefault(); e.stopPropagation();
         runWiki({ ...readTooltip(root, toLabel), addBtn: btn });
       });
-      btn.after(ours, wiki);
+      const auto = ours.cloneNode(false);
+      auto.textContent = '✨ Auto';
+      auto.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        runWiki({ ...readTooltip(root, toLabel), addBtn: btn, auto: true });
+      });
+      btn.after(auto, ours, wiki);
     }
 
     // Term editor: "Clear" button next to the Replacement Text label (deleting text is tedious on mobile).
@@ -349,10 +355,10 @@ ${wikiPromptSection(d.wiki)}` : ''}`;
   // changes the term AFTER the AI check; a rendering equal to its hash means "not seen yet".
   const checked = GM_getValue('checkedTerms', {});
   const knownRendering = (h, r) => !!r && r !== h;
-  let termStyle = null, termError = '';
+  let termStyle = null;
   const cssString = (s) => s.replace(/["\\]/g, '\\$&').replace(/\n/g, '\\a ');
   function renderTermColors() {
-    try { renderTermColorsUnsafe(); termError = ''; } catch (err) { termError = String(err && err.stack || err); console.error('[wtrrank] term colors:', err); }
+    try { renderTermColorsUnsafe(); } catch (err) { console.error('[wtrrank] term colors:', err); }
   }
   function renderTermColorsUnsafe() {
     const serie = currentSerie();
@@ -376,29 +382,6 @@ ${wikiPromptSection(d.wiki)}` : ''}`;
     if (termStyle.textContent !== css) termStyle.textContent = css;
   }
 
-  function termDiagnostics() {
-    const span = document.querySelector('.chapter-body .text-patch');
-    const style = document.getElementById('wtrrank-terms');
-    const info = typeof GM_info !== 'undefined' ? GM_info : {};
-    const lines = {
-      version: info.script?.version,
-      injectInto: info.injectInto,
-      serie: currentSerie(),
-      termSpans: document.querySelectorAll('.chapter-body .text-patch').length,
-      sampleSpan: span ? span.outerHTML.slice(0, 200) : '(none)',
-      spanColor: span ? getComputedStyle(span).color : '-',
-      termColorVar: getComputedStyle(span || document.documentElement).getPropertyValue('--wtr-term-color'),
-      styleTag: style ? `${style.isConnected ? 'connected' : 'detached'} in <${style.parentNode?.nodeName}>, ${style.textContent.length} chars` : 'missing',
-      styleSheetRules: style?.sheet ? style.sheet.cssRules.length : 'no sheet',
-      checkedHere: Object.keys(checked[currentSerie()] || {}).length,
-      bodyClass: document.querySelector('.chapter-body')?.className,
-      error: termError || '(none)',
-    };
-    const body = openPanel('Term colors diagnostics');
-    const text = Object.entries(lines).map(([k, v]) => `${k}: ${v}`).join('\n');
-    body.append(h('pre', { class: 'wtrrank-reason', style: 'white-space:pre-wrap;word-break:break-all;user-select:text' }, text),
-      h('div', { class: 'wtrrank-actions' }, h('button', { class: 'wtrrank-action', onclick: () => GM_setClipboard(text, 'text') }, 'Copy')));
-  }
   function markChecked(data) {
     const serie = currentSerie();
     if (!data.hash || !serie) return;
@@ -459,6 +442,9 @@ ${wikiPromptSection(d.wiki)}` : ''}`;
     .wtrrank-term { font-weight: 600; flex: 1; word-break: break-word; }
     .wtrrank-tag { font-size: 11px; background: #1e7e34; color: #fff; border-radius: 4px; padding: 1px 5px; }
     .wtrrank-tag.current { background: #2f6fde; }
+    .wtrrank-tag.origin-wiki { background: #8a5a00; }
+    .wtrrank-tag.origin-ai { background: #6b3fa0; }
+    .wtrrank-tag.origin-prior { background: #4a4f57; }
     .wtrrank-bar { height: 4px; background: #3a3d42; border-radius: 2px; margin: 6px 0 4px; overflow: hidden; }
     .wtrrank-bar > div { height: 100%; background: #4a7bd0; }
     .wtrrank-reason { color: #aab; font-size: 12.5px; }
@@ -511,6 +497,7 @@ ${wikiPromptSection(d.wiki)}` : ''}`;
   const getCfg = () => ({ key: GM_getValue('apiKey', ''), model: GM_getValue('model', '') });
 
   // Rows for the result panel; items without a score (prior renderings) get no % or bar.
+  const ORIGINS = { wiki: ['WIKI', 'Found on the fandom wiki'], ai: ['AI', 'Ranked by the AI'], prior: ['PREVIOUS', 'Kept in another novel'] };
   function renderRows(body, list, data) {
     body.replaceChildren(h('div', { class: 'wtrrank-muted', style: 'margin-bottom:8px' }, 'Tap a term to copy it.'));
     list.forEach((x, i) => {
@@ -520,6 +507,7 @@ ${wikiPromptSection(d.wiki)}` : ''}`;
         h('div', { class: 'wtrrank-top' },
           h('span', { class: 'wtrrank-muted' }, `#${i + 1}`),
           h('span', { class: 'wtrrank-term' }, x.term),
+          x.origin && h('span', { class: `wtrrank-tag origin-${x.origin}`, title: ORIGINS[x.origin][1] }, ORIGINS[x.origin][0]),
           x.isNew && h('span', { class: 'wtrrank-tag', title: 'Proposed by the AI' }, 'NEW'),
           sameTerm(x.term, data.current) && h('span', { class: 'wtrrank-tag current', title: 'Currently selected in the text' }, 'CURRENT'),
           note,
@@ -673,8 +661,9 @@ Respond with JSON only: {"renderings":[{"term":string,"page":string,"reason":str
     ? w.evident.map((x) => `Confirmed on wiki: ${x.term} (${x.reason})`).join('\n')
     : w.excerpts.map((x) => `[${x.page}] ${x.text}`).join('\n') || '(nothing found)');
 
+  // data.auto (✨ Auto button): fall through to AI Rank whenever the wiki gives nothing.
   async function runWiki(data) {
-    if (!wikiBases().length) return openConfig(() => runWiki(data));
+    if (!wikiBases().length) return data.auto ? runRanking(data) : openConfig(() => runWiki(data));
     if (showPrior(data)) return;
     const body = openPanel(`Wiki: ${data.source || data.current}`, () => openConfig(() => runWiki(data)), () => closeTooltip(data));
     body.append(h('div', { class: 'wtrrank-muted' }, 'Searching the wiki…'));
@@ -701,11 +690,16 @@ Respond with JSON only: {"renderings":[{"term":string,"page":string,"reason":str
         list = parseRenderings(await chat(cfg, WIKI_SYSTEM, `${wikiContext(data)}WIKI EXCERPTS:\n${wikiPromptSection(w)}`))
           .map((x) => ({ term: x.term, reason: x.reason, url: w.excerpts.find((ex) => ex.page === x.page)?.url }));
       }
-      if (!list.length) { body.replaceChildren(h('div', { class: 'wtrrank-muted' }, 'Nothing found on the wiki for this term.'), askAiButton(data)); return; }
+      if (!list.length) {
+        if (data.auto) return runRanking(data);
+        body.replaceChildren(h('div', { class: 'wtrrank-muted' }, 'Nothing found on the wiki for this term.'), askAiButton(data));
+        return;
+      }
       markChecked(data);
-      renderRows(body, list, data);
+      renderRows(body, list.map((x) => ({ ...x, origin: 'wiki' })), data);
       if (note) body.prepend(note);
     } catch (err) {
+      if (data.auto) return runRanking(data);
       body.replaceChildren(h('div', { class: 'wtrrank-err' }, String(err.message || err)), askAiButton(data));
     }
   }
@@ -723,7 +717,7 @@ Respond with JSON only: {"renderings":[{"term":string,"page":string,"reason":str
     if (!prior.length) return false;
     const body = openPanel(`Already checked: ${data.source || data.current}`, null, () => closeTooltip(data));
     markChecked(data);
-    renderRows(body, prior.map((term) => ({ term, reason: 'Rendering you kept after checking this term in another novel.' })), data);
+    renderRows(body, prior.map((term) => ({ term, origin: 'prior', reason: 'Rendering you kept after checking this term in another novel.' })), data);
     const forced = { ...data, force: true };
     body.append(h('div', { class: 'wtrrank-actions' },
       wikiBases().length && h('button', { class: 'wtrrank-action secondary', onclick: () => runWiki(forced) }, 'Search wiki anyway'),
@@ -743,7 +737,7 @@ Respond with JSON only: {"renderings":[{"term":string,"page":string,"reason":str
       body.replaceChildren(h('div', { class: 'wtrrank-muted' }, `Asking ${cfg.model}…`));
       const list = normalize(parseRanking(await chat(cfg, SYSTEM, buildPrompt({ ...data, wiki })), data.candidates));
       markChecked(data);
-      renderRows(body, list, data);
+      renderRows(body, list.map((x) => ({ ...x, origin: 'ai' })), data);
     } catch (err) {
       body.replaceChildren(h('div', { class: 'wtrrank-err' }, String(err.message || err)));
     }
@@ -821,8 +815,6 @@ Respond with JSON only: {"renderings":[{"term":string,"page":string,"reason":str
   }
 
   GM_registerMenuCommand('AI Term Ranker settings', () => openConfig());
-  GM_registerMenuCommand('Term colors diagnostics', () => termDiagnostics());
-
   // ---------- self-check ----------
   console.assert(detectProvider('sk-ant-api03-x').id === 'anthropic', 'wtrrank: anthropic');
   console.assert(detectProvider('sk-or-v1-x').id === 'openrouter', 'wtrrank: openrouter');
