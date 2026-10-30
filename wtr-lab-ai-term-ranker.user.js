@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.1.0
+// @version      1.1.1
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -311,7 +311,7 @@ ${saved}`;
     return body;
   }
 
-  const sameTerm = (a, b) => !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase();
+  const sameTerm = (a, b) => !!a && !!b && a.trim() === b.trim(); // case-sensitive: "pill" and "Pill" are different terms
   const getCfg = () => ({ key: GM_getValue('apiKey', ''), model: GM_getValue('model', '') });
 
   async function runRanking(data) {
