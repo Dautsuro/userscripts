@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.2.1
+// @version      1.2.2
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -267,22 +267,52 @@ ${saved}`;
   // Checks are stored per novel ({ serie: { hash: source } }); a check counts in every novel
   // only while its source term is saved globally, so novel-only terms get re-checked elsewhere.
   const checked = GM_getValue('checkedTerms', {});
-  let termStyle = null;
+  let termStyle = null, termError = '';
+  const cssString = (s) => s.replace(/["\\]/g, '\\$&').replace(/\n/g, '\\a ');
   function renderTermColors() {
+    try { renderTermColorsUnsafe(); termError = ''; } catch (err) { termError = String(err && err.stack || err); console.error('[wtrrank] term colors:', err); }
+  }
+  function renderTermColorsUnsafe() {
     const serie = currentSerie();
     const globalFroms = new Set(savedTerms().filter((t) => !t.filter?.serie_id).map((t) => t.from));
     const hashes = new Set(Object.keys(checked[serie] || {}));
     for (const novel of Object.values(checked)) {
       for (const [h, src] of Object.entries(novel)) if (globalFroms.has(src)) hashes.add(h);
     }
-    const done = [...hashes].map((h) => `.chapter-body .text-patch:not(#wtrrank)[data-hash="${CSS.escape(h)}"]`);
+    const done = [...hashes].map((h) => `.chapter-body .text-patch:not(#wtrrank)[data-hash="${cssString(h)}"]`);
     const css = '.chapter-body .text-patch:not(#wtrrank) { color: var(--wtr-term-color) !important; }'
       + (done.length ? `\n${done.join(',\n')} { color: inherit !important; }` : '');
+    // Own <style> element instead of GM_addStyle: its return value differs between Violentmonkey inject modes.
     if (!termStyle || !termStyle.isConnected) { // first run, or the page dropped it
-      termStyle = GM_addStyle(css);
-      if (!termStyle || !termStyle.nodeType) { termStyle = document.createElement('style'); termStyle.textContent = css; document.documentElement.append(termStyle); }
+      termStyle = document.getElementById('wtrrank-terms') || document.createElement('style');
+      termStyle.id = 'wtrrank-terms';
+      (document.head || document.documentElement).append(termStyle);
     }
-    else if (termStyle.textContent !== css) termStyle.textContent = css;
+    if (termStyle.textContent !== css) termStyle.textContent = css;
+  }
+
+  function termDiagnostics() {
+    const span = document.querySelector('.chapter-body .text-patch');
+    const style = document.getElementById('wtrrank-terms');
+    const info = typeof GM_info !== 'undefined' ? GM_info : {};
+    const lines = {
+      version: info.script?.version,
+      injectInto: info.injectInto,
+      serie: currentSerie(),
+      termSpans: document.querySelectorAll('.chapter-body .text-patch').length,
+      sampleSpan: span ? span.outerHTML.slice(0, 200) : '(none)',
+      spanColor: span ? getComputedStyle(span).color : '-',
+      termColorVar: getComputedStyle(span || document.documentElement).getPropertyValue('--wtr-term-color'),
+      styleTag: style ? `${style.isConnected ? 'connected' : 'detached'} in <${style.parentNode?.nodeName}>, ${style.textContent.length} chars` : 'missing',
+      styleSheetRules: style?.sheet ? style.sheet.cssRules.length : 'no sheet',
+      checkedHere: Object.keys(checked[currentSerie()] || {}).length,
+      bodyClass: document.querySelector('.chapter-body')?.className,
+      error: termError || '(none)',
+    };
+    const body = openPanel('Term colors diagnostics');
+    const text = Object.entries(lines).map(([k, v]) => `${k}: ${v}`).join('\n');
+    body.append(h('pre', { class: 'wtrrank-reason', style: 'white-space:pre-wrap;word-break:break-all;user-select:text' }, text),
+      h('div', { class: 'wtrrank-actions' }, h('button', { class: 'wtrrank-action', onclick: () => GM_setClipboard(text, 'text') }, 'Copy')));
   }
   function markChecked(data) {
     const serie = currentSerie();
@@ -435,6 +465,7 @@ ${saved}`;
   }
 
   GM_registerMenuCommand('AI Term Ranker settings', () => openConfig());
+  GM_registerMenuCommand('Term colors diagnostics', () => termDiagnostics());
 
   // ---------- self-check ----------
   console.assert(detectProvider('sk-ant-api03-x').id === 'anthropic', 'wtrrank: anthropic');
