@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.2.2
+// @version      1.2.3
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -263,7 +263,10 @@ ${saved}`;
   // ---------- term colors ----------
   // Unchecked terms get WTR-LAB's term color; terms already ranked by the AI go back to plain text.
   // Pure CSS keyed on data-hash (hash of the source text), so React-owned spans are never touched.
-  // :not(#wtrrank) adds id-level specificity so these beat the site's `.chapter-body.term-color-disabled .text-patch` !important rule.
+  // The site's `.chapter-body.term-color-disabled .text-patch { color: inherit !important }` lives in
+  // @layer components, and a layered !important beats any unlayered one. So we also color the bare
+  // wrapper <span> around each term: the term then inherits our color through the site's own rule.
+  // :not(#wtrrank) adds id-level specificity for the non-layered cases (term colors enabled).
   // Checks are stored per novel ({ serie: { hash: source } }); a check counts in every novel
   // only while its source term is saved globally, so novel-only terms get re-checked elsewhere.
   const checked = GM_getValue('checkedTerms', {});
@@ -279,8 +282,11 @@ ${saved}`;
     for (const novel of Object.values(checked)) {
       for (const [h, src] of Object.entries(novel)) if (globalFroms.has(src)) hashes.add(h);
     }
-    const done = [...hashes].map((h) => `.chapter-body .text-patch:not(#wtrrank)[data-hash="${cssString(h)}"]`);
-    const css = '.chapter-body .text-patch:not(#wtrrank) { color: var(--wtr-term-color) !important; }'
+    const done = [...hashes].flatMap((h) => {
+      const attr = `[data-hash="${cssString(h)}"]`;
+      return [`.chapter-body .text-patch:not(#wtrrank)${attr}`, `.chapter-body span:not(.text-patch):has(> .text-patch${attr})`];
+    });
+    const css = '.chapter-body .text-patch:not(#wtrrank), .chapter-body span:not(.text-patch):has(> .text-patch) { color: var(--wtr-term-color) !important; }'
       + (done.length ? `\n${done.join(',\n')} { color: inherit !important; }` : '');
     // Own <style> element instead of GM_addStyle: its return value differs between Violentmonkey inject modes.
     if (!termStyle || !termStyle.isConnected) { // first run, or the page dropped it
