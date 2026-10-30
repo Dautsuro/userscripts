@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.0.0
+// @version      1.1.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -169,8 +169,8 @@ Rules:
 
   function buildPrompt(d) {
     const saved = d.saved.length ? d.saved.map((t) => `${t.from} → ${t.to}`).join('\n') : '(none)';
+    // d.current is deliberately not sent: knowing the selected term would bias the AI towards it.
     return `SOURCE TERM: ${d.source || '(unknown)'}
-CURRENTLY SHOWN AS: ${d.current || '(unknown)'}
 
 CANDIDATES:
 ${d.candidates.map((c) => `- ${c}`).join('\n') || '(none, propose your own)'}
@@ -188,13 +188,21 @@ ${saved}`;
     if (e.target.closest && e.target.closest('.chapter-body')) lastClicked = e.target;
   }, true);
 
-  function contextAround(el, radius = 2) {
+  // Term elements showing the selected translation are replaced by ⟦source⟧ so the AI never sees the current choice.
+  function contextAround(el, source, current, radius = 2) {
     const line = el && el.closest('.wtr-line');
     if (!line) return '';
     const lines = [line];
     for (let i = 0, p = line; i < radius && (p = p.previousElementSibling); i++) lines.unshift(p);
     for (let i = 0, n = line; i < radius && (n = n.nextElementSibling); i++) lines.push(n);
-    return lines.map((l) => (l === line ? `>>> ${l.textContent.trim()} <<<` : l.textContent.trim())).join('\n');
+    return lines.map((l) => {
+      const clone = l.cloneNode(true);
+      if (current && el !== line) {
+        clone.querySelectorAll(el.tagName).forEach((t) => t.textContent.trim() === current && t.replaceWith(`⟦${source || '?'}⟧`));
+      }
+      const text = clone.textContent.trim();
+      return l === line ? `>>> ${text} <<<` : text;
+    }).join('\n');
   }
 
   const exactText = (root, txt) => [...root.querySelectorAll('div,span,label')].find((x) => x.textContent.trim() === txt);
@@ -213,8 +221,8 @@ ${saved}`;
     const candidates = [...new Set([
       ...chips.map(chipText),
       current,
-    ].filter(Boolean))];
-    return { source, current, candidates, context: contextAround(lastClicked), saved: savedTerms() };
+    ].filter(Boolean))].sort((a, b) => a.localeCompare(b)); // sorted so list position can't hint which one is selected
+    return { source, current, candidates, context: contextAround(lastClicked, source, current), saved: savedTerms() };
   }
 
   function scan() {
@@ -264,6 +272,7 @@ ${saved}`;
     .wtrrank-score { font-weight: 700; min-width: 44px; text-align: right; }
     .wtrrank-term { font-weight: 600; flex: 1; word-break: break-word; }
     .wtrrank-tag { font-size: 11px; background: #1e7e34; color: #fff; border-radius: 4px; padding: 1px 5px; }
+    .wtrrank-tag.current { background: #2f6fde; }
     .wtrrank-bar { height: 4px; background: #3a3d42; border-radius: 2px; margin: 6px 0 4px; overflow: hidden; }
     .wtrrank-bar > div { height: 100%; background: #4a7bd0; }
     .wtrrank-reason { color: #aab; font-size: 12.5px; }
@@ -302,6 +311,7 @@ ${saved}`;
     return body;
   }
 
+  const sameTerm = (a, b) => !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase();
   const getCfg = () => ({ key: GM_getValue('apiKey', ''), model: GM_getValue('model', '') });
 
   async function runRanking(data) {
@@ -319,6 +329,7 @@ ${saved}`;
             h('span', { class: 'wtrrank-muted' }, `#${i + 1}`),
             h('span', { class: 'wtrrank-term' }, x.term),
             x.isNew && h('span', { class: 'wtrrank-tag', title: 'Proposed by the AI' }, 'NEW'),
+            sameTerm(x.term, data.current) && h('span', { class: 'wtrrank-tag current', title: 'Currently selected in the text' }, 'CURRENT'),
             note,
             h('span', { class: 'wtrrank-score' }, `${x.score}%`)),
           h('div', { class: 'wtrrank-bar' }, h('div', { style: `width:${x.score}%` })),
