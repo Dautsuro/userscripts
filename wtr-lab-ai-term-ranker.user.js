@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.8.1
+// @version      1.8.2
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -663,12 +663,18 @@ Respond with JSON only: {"renderings":[{"term":string,"page":string,"reason":str
         list = found.filter((x) => x && typeof x.term === 'string' && x.term.trim())
           .map((x) => ({ term: x.term.trim(), reason: String(x.reason || ''), url: w.excerpts.find((ex) => ex.page === x.page)?.url }));
       }
-      if (!list.length) { body.replaceChildren(h('div', { class: 'wtrrank-muted' }, 'Nothing found on the wiki for this term.')); return; }
+      if (!list.length) { body.replaceChildren(h('div', { class: 'wtrrank-muted' }, 'Nothing found on the wiki for this term.'), askAiButton(data)); return; }
       markChecked(data);
       renderRows(body, list, data);
     } catch (err) {
-      body.replaceChildren(h('div', { class: 'wtrrank-err' }, String(err.message || err)));
+      body.replaceChildren(h('div', { class: 'wtrrank-err' }, String(err.message || err)), askAiButton(data));
     }
+  }
+
+  // Jump straight to AI Rank from a dead-end wiki panel; the tooltip stays open for the "+ Term" flow.
+  function askAiButton(data) {
+    return h('div', { class: 'wtrrank-actions' },
+      h('button', { class: 'wtrrank-action', onclick: () => runRanking(data) }, '🏆 Ask AI'));
   }
 
   async function runRanking(data) {
