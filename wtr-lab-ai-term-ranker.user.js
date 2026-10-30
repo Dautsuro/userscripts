@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.8.2
+// @version      1.8.3
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -309,10 +309,25 @@ ${wikiPromptSection(d.wiki)}` : ''}`;
       const input = document.querySelector('input[placeholder="Text to replace with"]');
       if (!input) { if (Date.now() - started < 3000) setTimeout(tick, 50); return; }
       setInputValue(input, term);
+      keepKeyboardClosed(input.closest('[role="dialog"]') || input.form || document.body);
       // The editor may prefill after mounting; re-apply once if it overwrote us.
       setTimeout(() => { if (input.isConnected && input.value !== term) setInputValue(input, term); }, 300);
     };
     tick();
+  }
+
+  // The editor autofocuses an input, and on phones the keyboard then covers Save. For a moment after
+  // opening, undo any focus on its inputs that the user didn't cause by tapping.
+  function keepKeyboardClosed(dialog) {
+    let userTapped = false;
+    const isField = (el) => el && dialog.contains(el) && el.matches('input:not([type="checkbox"]), textarea');
+    const onDown = (e) => { if (e.target.closest?.('input, textarea')) userTapped = true; };
+    // Polling, not focusin: programmatic focus doesn't always fire events (e.g. unfocused window).
+    const check = () => { if (!userTapped && isField(document.activeElement)) document.activeElement.blur(); };
+    document.addEventListener('pointerdown', onDown, true);
+    check();
+    const timer = setInterval(check, 100);
+    setTimeout(() => { clearInterval(timer); document.removeEventListener('pointerdown', onDown, true); }, 1500);
   }
   let queued = false;
   new MutationObserver(() => {
