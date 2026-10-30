@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.8.0
+// @version      1.8.1
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -177,7 +177,7 @@ Rules:
 - Include every listed candidate exactly as written (with "new": false).
 - Consistency: REFERENCE TERMS are related terms the user already verified; they define the naming conventions to follow (how names, titles, ranks, sects, techniques and shared characters are rendered). Other translated terms that appear in the CONTEXT but are not in REFERENCE TERMS are unverified machine output and must have NO weight in your decision.
 - Base form only: the chosen term is substituted verbatim everywhere the source appears, and the site itself appends "s" in plural sentences. So the term must be the singular, uninflected base form, independent of whether the CONTEXT sentence is singular or plural. A pluralized or inflected candidate (e.g. "Soul Rings" for 魂环) is wrong: it would produce "Soul Ringss". Score such candidates 0 unless the name is inherently plural. Use the CONTEXT only to understand the meaning, never to pick grammatical number.
-- Official renderings: if the NOVEL belongs to or is fan-fiction of a known franchise (e.g. Soul Land / Douluo Dalu) and the term has an established official or widely accepted English rendering in that franchise, rank that rendering first, even above a more accurate or natural one, and say so in the reason. Add it with "new": true if it is not listed. Apply this only when you are confident the rendering is established; never invent one. WIKI EVIDENCE, when present, comes from the franchise's fan wiki: a rendering confirmed there counts as established (still use its singular base form).
+- Official renderings: if the NOVEL belongs to or is fan-fiction of a known franchise (e.g. Soul Land / Douluo Dalu) and the term has an established official or widely accepted English rendering in that franchise, rank that rendering first, even above a more accurate or natural one, and say so in the reason. Add it with "new": true if it is not listed. Apply this only when you are confident the rendering is established; never invent one. WIKI EVIDENCE, when present, comes from the franchise's fan wiki: a rendering confirmed there counts as established (still use its singular base form); when it shows several names for the same thing, the one used most often on the wiki is the established one.
 - Otherwise judge accuracy to the source meaning, fit with the context, consistency with REFERENCE TERMS, and naturalness in English.
 - "reason": one short sentence explaining why this term got this position and score.
 - Order the array from highest to lowest score.`;
@@ -544,6 +544,9 @@ ${wikiPromptSection(d.wiki)}` : ''}`;
     .replace(/'{2,}/g, '')
     .replace(/<\/?(?:sup|small|span|b|i|br\s*\/?)[^>]*>/gi, ' ');
 
+  // Remove {{templates}} innermost-first (they nest).
+  const stripTemplates = (t) => { let prev; do { prev = t; t = t.replace(/\{\{[^{}]*\}\}/g, ''); } while (t !== prev); return t; };
+
   const wikiCache = new Map(); // source → Promise<result>, so Wiki and AI Rank share one lookup
 
   // Search every wiki with the source and the candidates, read the top pages and look for the source.
@@ -556,7 +559,9 @@ ${wikiPromptSection(d.wiki)}` : ''}`;
   }
 
   async function wikiLookupUncached(src, candidates) {
-    const evident = [], excerpts = [];
+    const evident = [], excerpts = [], texts = [];
+    const latinName = (s) => s.replace(/\s*\([^)]*\)\s*$/, '').trim();
+    const isLatin = (s) => /^[A-Za-z][\w'’ -]*$/.test(s);
     const infobox = new RegExp(`\\|\\s*[\\w ]+?\\s*=\\s*${escapeRe(src)}\\s*(?=\\||}}|\\n|$)`);
     // Capitalized name (small linking words allowed) right before "(源)", so sentence words aren't captured.
     const alias = new RegExp(`([A-Z][\\w'’-]*(?:\\s+(?:[A-Z][\\w'’-]*|of|the|and|in|to)){0,5})\\s*[（(]\\s*${escapeRe(src)}\\s*[)）]`);
@@ -564,18 +569,35 @@ ${wikiPromptSection(d.wiki)}` : ''}`;
       const queries = [src, ...candidates.slice(0, 5)];
       const searches = await Promise.all(queries.map((q) => gm('GET', `${base}/api.php?action=query&list=search&srlimit=5&format=json&srsearch=${encodeURIComponent(q)}`)
         .then((r) => (r.query?.search || []).map((x) => x.title)).catch(() => [])));
-      const titles = [...new Set(searches.flat())].slice(0, 8);
+      // Round-robin across queries so each name brings the same number of pages (unbiased usage counts).
+      const titles = [...new Set(Array.from({ length: 5 }, (_, i) => searches.map((s) => s[i])).flat().filter(Boolean))].slice(0, 8);
       if (!titles.length) continue;
-      const r = await gm('GET', `${base}/api.php?action=query&prop=revisions&rvprop=content&rvslots=main&redirects=1&format=json&formatversion=2&titles=${encodeURIComponent(titles.join('|'))}`);
+      const r = await gm('GET', `${base}/api.php?action=query&prop=revisions|redirects&rvprop=content&rvslots=main&rdlimit=max&redirects=1&format=json&formatversion=2&titles=${encodeURIComponent(titles.join('|'))}`);
       const pages = (r.query?.pages || []).filter((p) => p.revisions).sort((a, b) => titles.indexOf(a.title) - titles.indexOf(b.title));
       for (const p of pages) {
         const raw = p.revisions[0].slots?.main?.content || '';
         const url = `${base}/wiki/${encodeURIComponent(p.title.replace(/ /g, '_'))}`;
         const text = cleanWikitext(raw);
+        texts.push({ title: p.title, prose: cleanWikitext(stripTemplates(raw)) });
         if (infobox.test(raw)) {
-          // Page titles carry disambiguation ("Tang San (SL5)") and are sometimes plural ("Soul Rings").
           // Drop disambiguation ("Tang San (SL5)") and subpage parts ("Shrek Academy/Soul Land III").
-          evident.push({ term: p.title.split('/')[0].replace(/\s*\([^)]*\)\s*$/, ''), url, reason: `"${p.title}" page lists ${src} as its Chinese name.` });
+          evident.push({ term: latinName(p.title.split('/')[0]), url, reason: `"${p.title}" page lists ${src} as its Chinese name.` });
+          // Same subject under other names: infobox alias/name fields and pages redirecting here ("Spirit Hall").
+          // Nicknames are different names, not translations: skip parts carrying their own Chinese
+          // ("Xiao San (小三)") and keep only names sharing a word with the title or a candidate.
+          const words = new Set([p.title, ...candidates].join(' ').toLowerCase().split(/[^a-z']+/).filter((w) => w.length >= 3));
+          const variant = (name) => isLatin(name) && name.toLowerCase().split(/[^a-z']+/).some((w) => words.has(w));
+          for (const m of raw.matchAll(/\|\s*(?:alias(?:es)?|other names?|english(?: name)?|name|title)\s*=\s*([^|}]+)/gi)) {
+            for (const part of m[1].split(/<br\s*\/?>|[,;\n]/i)) {
+              if (/[㐀-鿿]/.test(part)) continue;
+              const name = latinName(cleanWikitext(part));
+              if (variant(name)) evident.push({ term: name, url, reason: `Listed as a name of the "${p.title}" page (${src}).` });
+            }
+          }
+          for (const rd of p.redirects || []) {
+            const name = latinName(rd.title);
+            if (variant(name)) evident.push({ term: name, url, reason: `"${rd.title}" redirects to the "${p.title}" page (${src}).` });
+          }
         }
         const a = text.match(alias);
         if (a) evident.push({ term: a[1].trim().replace(/^The\s+/, ''), url, reason: `Written "${a[1].trim()} (${src})" on the "${p.title}" page.` });
@@ -597,9 +619,19 @@ ${wikiPromptSection(d.wiki)}` : ''}`;
       if (known.has(x.term.slice(0, -1))) x.term = x.term.slice(0, -1);
       else x.reason += ' Plural on the wiki; the term may need its singular form.';
     }
+    // Contested names ("Martial Soul Hall" title vs "Spirit Hall" in prose): rank by how often each name
+    // appears in the visible text of the pages already read, so the most used rendering comes first.
     const seen = new Set();
+    const unique = evident.filter((x) => !seen.has(x.term) && seen.add(x.term));
+    // Prose only: infoboxes/templates repeat the page title and would inflate it.
+    const all = texts.map((t) => t.prose).join('\n');
+    for (const x of unique) {
+      x.uses = all.split(x.term).length - 1;
+      x.reason += ` Used ${x.uses}× in the text of the ${texts.length} wiki pages read.`;
+    }
+    unique.sort((a, b) => b.uses - a.uses);
     return {
-      evident: evident.filter((x) => !seen.has(x.term) && seen.add(x.term)),
+      evident: unique,
       excerpts: excerpts.slice(0, 10), // ~4k chars max keeps the AI call cheap
     };
   }
