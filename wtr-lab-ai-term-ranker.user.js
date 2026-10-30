@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.2.3
+// @version      1.3.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -164,13 +164,13 @@ Rules:
 - 0 is always allowed: give 0 to candidates that are wrong, irrelevant or clearly worse. Never spread points just to be fair.
 - You are not limited to the listed candidates. If a better or competitive rendering exists, add it with "new": true and score it by exactly the same standard as listed ones.
 - Include every listed candidate exactly as written (with "new": false).
-- Consistency: the user's SAVED TERMS define the naming conventions to follow (how names, titles, ranks, sects, techniques are rendered). Other translated terms that appear in the CONTEXT but are not in SAVED TERMS are unverified machine output and must have NO weight in your decision.
-- Judge accuracy to the source meaning, fit with the context, consistency with SAVED TERMS, and naturalness in English.
+- Consistency: REFERENCE TERMS are related terms the user already verified; they define the naming conventions to follow (how names, titles, ranks, sects, techniques and shared characters are rendered). Other translated terms that appear in the CONTEXT but are not in REFERENCE TERMS are unverified machine output and must have NO weight in your decision.
+- Judge accuracy to the source meaning, fit with the context, consistency with REFERENCE TERMS, and naturalness in English.
 - "reason": one short sentence explaining why this term got this position and score.
 - Order the array from highest to lowest score.`;
 
   function buildPrompt(d) {
-    const saved = d.saved.length ? d.saved.map((t) => `${t.from} → ${t.to}`).join('\n') : '(none)';
+    const refs = d.refs.length ? d.refs.map((t) => `${t.from} → ${t.to}`).join('\n') : '(none)';
     // d.current is deliberately not sent: knowing the selected term would bias the AI towards it.
     return `SOURCE TERM: ${d.source || '(unknown)'}
 
@@ -180,8 +180,8 @@ ${d.candidates.map((c) => `- ${c}`).join('\n') || '(none, propose your own)'}
 CONTEXT:
 ${d.context || '(none)'}
 
-SAVED TERMS (source → translation):
-${saved}`;
+REFERENCE TERMS (source → verified translation):
+${refs}`;
   }
 
   // ---------- page integration ----------
@@ -225,7 +225,7 @@ ${saved}`;
       current,
     ].filter(Boolean))].sort((a, b) => a.localeCompare(b)); // sorted so list position can't hint which one is selected
     const hash = lastClicked?.closest('.text-patch')?.dataset.hash || '';
-    return { source, current, hash, candidates, context: contextAround(lastClicked, source, current), saved: savedTerms() };
+    return { source, current, hash, candidates, context: contextAround(lastClicked, source, current), refs: referenceTerms(hash || source) };
   }
 
   function scan() {
@@ -257,7 +257,7 @@ ${saved}`;
   new MutationObserver(() => {
     if (queued) return;
     queued = true;
-    setTimeout(() => { queued = false; scan(); renderTermColors(); }, 50); // re-render: SPA navigation, newly saved global terms
+    setTimeout(() => { queued = false; scan(); syncRenderings(); renderTermColors(); }, 50); // SPA navigation, term edits, newly saved global terms
   }).observe(document.body, { childList: true, subtree: true });
 
   // ---------- term colors ----------
@@ -267,9 +267,12 @@ ${saved}`;
   // @layer components, and a layered !important beats any unlayered one. So we also color the bare
   // wrapper <span> around each term: the term then inherits our color through the site's own rule.
   // :not(#wtrrank) adds id-level specificity for the non-layered cases (term colors enabled).
-  // Checks are stored per novel ({ serie: { hash: source } }); a check counts in every novel
-  // only while its source term is saved globally, so novel-only terms get re-checked elsewhere.
+  // Checks are stored per novel ({ serie: { hash: rendering } }, data-hash is the source text itself);
+  // a check counts in every novel only while its source term is saved globally, so novel-only terms
+  // get re-checked elsewhere. The rendering is re-read from the page (syncRenderings) because the user
+  // changes the term AFTER the AI check; a rendering equal to its hash means "not seen yet".
   const checked = GM_getValue('checkedTerms', {});
+  const knownRendering = (h, r) => !!r && r !== h;
   let termStyle = null, termError = '';
   const cssString = (s) => s.replace(/["\\]/g, '\\$&').replace(/\n/g, '\\a ');
   function renderTermColors() {
@@ -280,7 +283,7 @@ ${saved}`;
     const globalFroms = new Set(savedTerms().filter((t) => !t.filter?.serie_id).map((t) => t.from));
     const hashes = new Set(Object.keys(checked[serie] || {}));
     for (const novel of Object.values(checked)) {
-      for (const [h, src] of Object.entries(novel)) if (globalFroms.has(src)) hashes.add(h);
+      for (const h of Object.keys(novel)) if (globalFroms.has(h)) hashes.add(h);
     }
     const done = [...hashes].flatMap((h) => {
       const attr = `[data-hash="${cssString(h)}"]`;
@@ -323,9 +326,44 @@ ${saved}`;
   function markChecked(data) {
     const serie = currentSerie();
     if (!data.hash || !serie) return;
-    (checked[serie] ||= {})[data.hash] = data.source;
+    (checked[serie] ||= {})[data.hash] = data.current || data.hash;
     GM_setValue('checkedTerms', checked);
     renderTermColors();
+  }
+
+  // Keep each checked term's rendering equal to what the page shows now (first span per hash).
+  function syncRenderings() {
+    const mine = checked[currentSerie()];
+    if (!mine) return;
+    const seen = new Set();
+    let changed = false;
+    for (const el of document.querySelectorAll('.chapter-body .text-patch[data-hash]')) {
+      const hash = el.dataset.hash, text = el.textContent.trim();
+      if (seen.has(hash) || !(hash in mine) || !text) continue;
+      seen.add(hash);
+      if (mine[hash] !== text) { mine[hash] = text; changed = true; }
+    }
+    if (changed) GM_setValue('checkedTerms', checked);
+  }
+
+  // Checked terms from every novel whose source shares a character with `source` (keeps the prompt small).
+  function referenceTerms(source) {
+    const chars = new Set(source);
+    const seen = new Set(), out = [];
+    for (const novel of Object.values(checked)) {
+      for (const [from, to] of Object.entries(novel)) {
+        if (from === source || !knownRendering(from, to) || ![...from].some((c) => chars.has(c)) || seen.has(`${from}\0${to}`)) continue;
+        seen.add(`${from}\0${to}`);
+        out.push({ from, to });
+      }
+    }
+    return out;
+  }
+
+  // Renderings chosen for this exact source in other novels.
+  function priorRenderings(hash) {
+    const serie = currentSerie();
+    return [...new Set(Object.entries(checked).filter(([n]) => n !== serie).map(([, novel]) => novel[hash]).filter((r) => knownRendering(hash, r)))];
   }
   renderTermColors();
 
@@ -386,7 +424,40 @@ ${saved}`;
   const sameTerm = (a, b) => !!a && !!b && a.trim() === b.trim(); // case-sensitive: "pill" and "Pill" are different terms
   const getCfg = () => ({ key: GM_getValue('apiKey', ''), model: GM_getValue('model', '') });
 
+  // Rows for the result panel; items without a score (prior renderings) get no % or bar.
+  function renderRows(body, list, data) {
+    body.replaceChildren(h('div', { class: 'wtrrank-muted', style: 'margin-bottom:8px' }, 'Tap a term to copy it.'));
+    list.forEach((x, i) => {
+      const scored = typeof x.score === 'number';
+      const note = h('span', { class: 'wtrrank-copied' });
+      const row = h('div', { class: 'wtrrank-row', tabindex: '0', role: 'button' },
+        h('div', { class: 'wtrrank-top' },
+          h('span', { class: 'wtrrank-muted' }, `#${i + 1}`),
+          h('span', { class: 'wtrrank-term' }, x.term),
+          x.isNew && h('span', { class: 'wtrrank-tag', title: 'Proposed by the AI' }, 'NEW'),
+          sameTerm(x.term, data.current) && h('span', { class: 'wtrrank-tag current', title: 'Currently selected in the text' }, 'CURRENT'),
+          note,
+          scored && h('span', { class: 'wtrrank-score' }, `${x.score}%`)),
+        scored && h('div', { class: 'wtrrank-bar' }, h('div', { style: `width:${x.score}%` })),
+        h('div', { class: 'wtrrank-reason' }, x.reason));
+      const copy = () => { GM_setClipboard(x.term, 'text'); note.textContent = 'Copied'; setTimeout(() => (note.textContent = ''), 1200); };
+      row.addEventListener('click', copy);
+      row.addEventListener('keydown', (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), copy()));
+      body.append(row);
+    });
+  }
+
   async function runRanking(data) {
+    // Already checked in another novel: propose that rendering instead of paying for an AI call.
+    const prior = data.forceAI ? [] : priorRenderings(data.hash);
+    if (prior.length) {
+      const body = openPanel(`Already checked: ${data.source || data.current}`);
+      markChecked(data);
+      renderRows(body, prior.map((term) => ({ term, reason: 'Rendering you kept after checking this term in another novel.' })), data);
+      body.append(h('div', { class: 'wtrrank-actions' },
+        h('button', { class: 'wtrrank-action secondary', onclick: () => runRanking({ ...data, forceAI: true }) }, 'Ask AI anyway')));
+      return;
+    }
     const cfg = getCfg();
     if (!cfg.key || !cfg.model) return openConfig(() => runRanking(data));
     const body = openPanel(`Tier list: ${data.source || data.current}`, () => openConfig(() => runRanking(data)));
@@ -394,24 +465,7 @@ ${saved}`;
     try {
       const list = normalize(parseRanking(await chat(cfg, SYSTEM, buildPrompt(data))));
       markChecked(data);
-      body.replaceChildren(h('div', { class: 'wtrrank-muted', style: 'margin-bottom:8px' }, 'Tap a term to copy it.'));
-      list.forEach((x, i) => {
-        const note = h('span', { class: 'wtrrank-copied' });
-        const row = h('div', { class: 'wtrrank-row', tabindex: '0', role: 'button' },
-          h('div', { class: 'wtrrank-top' },
-            h('span', { class: 'wtrrank-muted' }, `#${i + 1}`),
-            h('span', { class: 'wtrrank-term' }, x.term),
-            x.isNew && h('span', { class: 'wtrrank-tag', title: 'Proposed by the AI' }, 'NEW'),
-            sameTerm(x.term, data.current) && h('span', { class: 'wtrrank-tag current', title: 'Currently selected in the text' }, 'CURRENT'),
-            note,
-            h('span', { class: 'wtrrank-score' }, `${x.score}%`)),
-          h('div', { class: 'wtrrank-bar' }, h('div', { style: `width:${x.score}%` })),
-          h('div', { class: 'wtrrank-reason' }, x.reason));
-        const copy = () => { GM_setClipboard(x.term, 'text'); note.textContent = 'Copied'; setTimeout(() => (note.textContent = ''), 1200); };
-        row.addEventListener('click', copy);
-        row.addEventListener('keydown', (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), copy()));
-        body.append(row);
-      });
+      renderRows(body, list, data);
     } catch (err) {
       body.replaceChildren(h('div', { class: 'wtrrank-err' }, String(err.message || err)));
     }
