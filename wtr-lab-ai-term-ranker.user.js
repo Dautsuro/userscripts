@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.12.0
+// @version      1.12.1
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -329,7 +329,14 @@ ${wikiPromptSection(d.wiki)}` : ''}`;
         if (scopeLabel() && isGlobal() !== global) (dialog.querySelector('#global-switch') || scopeLabel()).click();
         setTimeout(() => {
           const save = [...dialog.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Save');
-          if (input.isConnected && input.value === term && scopeLabel() && isGlobal() === global && save) save.click();
+          if (!(input.isConnected && input.value === term && scopeLabel() && isGlobal() === global && save)) return;
+          save.click();
+          // The editor stays open after saving: close it once the save request has had time to go out.
+          setTimeout(() => {
+            if (!dialog.isConnected) return;
+            const close = [...dialog.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Close');
+            if (close) close.click(); else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+          }, 800);
         }, 200);
       }, 300);
     };
