@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.10.0
+// @version      1.11.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -283,7 +283,9 @@ ${wikiPromptSection(d.wiki)}` : ''}`;
         e.preventDefault(); e.stopPropagation();
         runWiki({ ...readTooltip(root, toLabel), addBtn: btn, auto: true });
       });
-      btn.after(auto, ours, wiki);
+      // "Don't miss" setting: only the Auto button, so AI Rank / Wiki can't be tapped by mistake.
+      if (GM_getValue('autoOnly', false)) btn.after(auto);
+      else btn.after(ours, wiki, auto);
     }
 
     // Term editor: "Clear" button next to the Replacement Text label (deleting text is tedious on mobile).
@@ -756,6 +758,9 @@ Respond with JSON only: {"renderings":[{"term":string,"page":string,"reason":str
     wikisIn.value = GM_getValue('wikis', '');
     const saveWikis = () => GM_setValue('wikis', wikisIn.value.trim());
     wikisIn.addEventListener('change', saveWikis); // saved on its own: no API key needed for evident wiki hits
+    const autoOnlyIn = h('input', { type: 'checkbox', style: 'width:18px;height:18px;margin:0' });
+    autoOnlyIn.checked = GM_getValue('autoOnly', false);
+    autoOnlyIn.addEventListener('change', () => GM_setValue('autoOnly', autoOnlyIn.checked)); // applies to tooltips opened afterwards
 
     async function load() {
       const p = detectProvider(keyIn.value);
@@ -785,6 +790,8 @@ Respond with JSON only: {"renderings":[{"term":string,"page":string,"reason":str
       h('label', { class: 'wtrrank-field' }, 'Or type a model name'), manual,
       h('label', { class: 'wtrrank-field' }, 'Fandom wikis (one per line)'), wikisIn,
       h('div', { class: 'wtrrank-muted' }, 'Wiki name or URL, e.g. "soulland" for soulland.fandom.com.'),
+      h('label', { class: 'wtrrank-field', style: 'display:flex;align-items:center;gap:8px;cursor:pointer' }, autoOnlyIn, "Don't miss: show only the ✨ Auto button"),
+      h('div', { class: 'wtrrank-muted' }, 'Hides the AI Rank and Wiki buttons in the term tooltip.'),
       h('div', { class: 'wtrrank-actions' },
         h('button', { class: 'wtrrank-action secondary', onclick: load }, 'Reload models'),
         h('button', {
@@ -802,13 +809,13 @@ Respond with JSON only: {"renderings":[{"term":string,"page":string,"reason":str
         }, 'Save')),
       h('div', { class: 'wtrrank-actions', style: 'justify-content:flex-start;border-top:1px solid #3a3d42;padding-top:12px' },
         h('button', { class: 'wtrrank-action danger', onclick: resetData }, 'Reset saved data')),
-      h('div', { class: 'wtrrank-muted' }, 'Deletes every checked term in all novels. Keeps the API key, model and wikis.'));
+      h('div', { class: 'wtrrank-muted' }, 'Deletes every checked term in all novels. Keeps the API key, model and other settings.'));
     if (cfg.key) load();
   }
 
   function resetData() {
-    if (!confirm('Delete all checked terms in every novel? The API key, model and wikis are kept. This cannot be undone.')) return;
-    for (const k of GM_listValues()) if (!['apiKey', 'model', 'wikis'].includes(k)) GM_deleteValue(k);
+    if (!confirm('Delete all checked terms in every novel? The API key, model and other settings are kept. This cannot be undone.')) return;
+    for (const k of GM_listValues()) if (!['apiKey', 'model', 'wikis', 'autoOnly'].includes(k)) GM_deleteValue(k);
     for (const k of Object.keys(checked)) delete checked[k];
     renderTermColors();
     document.querySelector('.wtrrank-overlay')?.remove();
