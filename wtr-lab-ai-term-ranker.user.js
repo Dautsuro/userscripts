@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.2.0
+// @version      1.2.1
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -146,10 +146,12 @@
     return out;
   }
 
+  const currentSerie = () => (location.pathname.match(/\/novel\/(\d+)/) || [])[1] || '';
+
   function savedTerms() {
     let raw;
     try { raw = JSON.parse(localStorage.getItem('user_terms_v2') || '[]'); } catch (_) { raw = []; }
-    const serie = (location.pathname.match(/\/novel\/(\d+)/) || [])[1];
+    const serie = currentSerie();
     return (Array.isArray(raw) ? raw : [])
       .map((t) => (Array.isArray(t) ? { to: t[1], from: t[2], filter: t[4] } : t))
       .filter((t) => t && t.from && t.to && (!t.filter?.serie_id || String(t.filter.serie_id) === serie));
@@ -255,25 +257,38 @@ ${saved}`;
   new MutationObserver(() => {
     if (queued) return;
     queued = true;
-    setTimeout(() => { queued = false; scan(); }, 50);
+    setTimeout(() => { queued = false; scan(); renderTermColors(); }, 50); // re-render: SPA navigation, newly saved global terms
   }).observe(document.body, { childList: true, subtree: true });
 
   // ---------- term colors ----------
   // Unchecked terms get WTR-LAB's term color; terms already ranked by the AI go back to plain text.
   // Pure CSS keyed on data-hash (hash of the source text), so React-owned spans are never touched.
-  // html/body prefix outranks the site's `.chapter-body.term-color-disabled .text-patch` !important rule.
-  const checked = GM_getValue('checkedHashes', {});
-  const termStyle = document.createElement('style');
-  document.head.append(termStyle);
+  // :not(#wtrrank) adds id-level specificity so these beat the site's `.chapter-body.term-color-disabled .text-patch` !important rule.
+  // Checks are stored per novel ({ serie: { hash: source } }); a check counts in every novel
+  // only while its source term is saved globally, so novel-only terms get re-checked elsewhere.
+  const checked = GM_getValue('checkedTerms', {});
+  let termStyle = null;
   function renderTermColors() {
-    const done = Object.keys(checked).map((h) => `html body .chapter-body .text-patch[data-hash="${CSS.escape(h)}"]`);
-    termStyle.textContent = 'html body .chapter-body .text-patch[data-hash] { color: var(--wtr-term-color) !important; }'
+    const serie = currentSerie();
+    const globalFroms = new Set(savedTerms().filter((t) => !t.filter?.serie_id).map((t) => t.from));
+    const hashes = new Set(Object.keys(checked[serie] || {}));
+    for (const novel of Object.values(checked)) {
+      for (const [h, src] of Object.entries(novel)) if (globalFroms.has(src)) hashes.add(h);
+    }
+    const done = [...hashes].map((h) => `.chapter-body .text-patch:not(#wtrrank)[data-hash="${CSS.escape(h)}"]`);
+    const css = '.chapter-body .text-patch:not(#wtrrank) { color: var(--wtr-term-color) !important; }'
       + (done.length ? `\n${done.join(',\n')} { color: inherit !important; }` : '');
+    if (!termStyle || !termStyle.isConnected) { // first run, or the page dropped it
+      termStyle = GM_addStyle(css);
+      if (!termStyle || !termStyle.nodeType) { termStyle = document.createElement('style'); termStyle.textContent = css; document.documentElement.append(termStyle); }
+    }
+    else if (termStyle.textContent !== css) termStyle.textContent = css;
   }
-  function markChecked(hash) {
-    if (!hash || checked[hash]) return;
-    checked[hash] = 1;
-    GM_setValue('checkedHashes', checked);
+  function markChecked(data) {
+    const serie = currentSerie();
+    if (!data.hash || !serie) return;
+    (checked[serie] ||= {})[data.hash] = data.source;
+    GM_setValue('checkedTerms', checked);
     renderTermColors();
   }
   renderTermColors();
@@ -342,7 +357,7 @@ ${saved}`;
     body.append(h('div', { class: 'wtrrank-muted' }, `Asking ${cfg.model}…`));
     try {
       const list = normalize(parseRanking(await chat(cfg, SYSTEM, buildPrompt(data))));
-      markChecked(data.hash);
+      markChecked(data);
       body.replaceChildren(h('div', { class: 'wtrrank-muted', style: 'margin-bottom:8px' }, 'Tap a term to copy it.'));
       list.forEach((x, i) => {
         const note = h('span', { class: 'wtrrank-copied' });
