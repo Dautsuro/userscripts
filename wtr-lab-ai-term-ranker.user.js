@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.8.3
+// @version      1.9.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -653,9 +653,24 @@ ${wikiPromptSection(d.wiki)}` : ''}`;
 
   const WIKI_SYSTEM = `You read excerpts from a franchise fan wiki and find the established English rendering of one Chinese term.
 Respond with JSON only: {"renderings":[{"term":string,"page":string,"reason":string}]}
+- Use the novel CONTEXT to identify which thing the source term refers to.
 - Only report renderings the excerpts actually support for this exact source term; return {"renderings":[]} if none.
 - Give the singular base form (the reader adds plural "s" itself).
 - "reason": one short sentence quoting the evidence.`;
+
+  const WIKI_PICK_SYSTEM = `Several English names were found on a franchise fan wiki for one Chinese term. Using the novel CONTEXT, decide which of them correctly render the term here.
+Respond with JSON only: {"renderings":[{"term":string,"reason":string}]}, best first.
+- Only use names from WIKI FINDINGS (you may reduce one to its singular base form; the reader adds plural "s" itself).
+- Drop names that refer to a different thing than the source term in this context.
+- When several are valid, prefer the one used most often on the wiki.
+- "reason": one short sentence.`;
+
+  const wikiContext = (data) => `NOVEL: ${data.novel || '(unknown)'}\nSOURCE TERM: ${data.source}\n\nCONTEXT:\n${data.context || '(none)'}\n\n`;
+  function parseRenderings(text) {
+    const s = text.indexOf('{'), e = text.lastIndexOf('}');
+    const found = s >= 0 && e > s ? JSON.parse(text.slice(s, e + 1)).renderings || [] : [];
+    return found.filter((x) => x && typeof x.term === 'string' && x.term.trim()).map((x) => ({ ...x, term: x.term.trim(), reason: String(x.reason || '') }));
+  }
 
   const wikiPromptSection = (w) => (w.evident.length
     ? w.evident.map((x) => `Confirmed on wiki: ${x.term} (${x.reason})`).join('\n')
@@ -663,20 +678,28 @@ Respond with JSON only: {"renderings":[{"term":string,"page":string,"reason":str
 
   async function runWiki(data) {
     if (!wikiBases().length) return openConfig(() => runWiki(data));
+    if (showPrior(data)) return;
     const body = openPanel(`Wiki: ${data.source || data.current}`, () => openConfig(() => runWiki(data)), () => closeTooltip(data));
     body.append(h('div', { class: 'wtrrank-muted' }, 'Searching the wiki…'));
     try {
       const w = await wikiLookup(data);
+      const cfg = getCfg();
       let list = w.evident;
-      if (!list.length && w.excerpts.length) {
-        const cfg = getCfg();
+      if (list.length > 2 && cfg.key && cfg.model) {
+        // Many names: let the AI pick using the novel context; keep the wiki list if it returns nothing usable.
+        body.replaceChildren(h('div', { class: 'wtrrank-muted' }, `Found ${list.length} names. Asking ${cfg.model} to pick using the context…`));
+        const findings = new Map(list.map((x) => [x.term, x]));
+        const picked = parseRenderings(await chat(cfg, WIKI_PICK_SYSTEM, `${wikiContext(data)}WIKI FINDINGS:\n${list.map((x) => `- ${x.term}: ${x.reason}`).join('\n')}`))
+          .map((p) => {
+            const f = findings.get(p.term) || findings.get(`${p.term}s`);
+            return { term: p.term, url: f?.url, reason: f ? `${p.reason} (${f.reason})` : p.reason };
+          });
+        if (picked.length) list = picked;
+      } else if (!list.length && w.excerpts.length) {
         if (!cfg.key || !cfg.model) throw new Error('Nothing evident on the wiki, and no AI is configured to read the pages.');
         body.replaceChildren(h('div', { class: 'wtrrank-muted' }, `Nothing evident. Asking ${cfg.model} to read ${w.excerpts.length} excerpts…`));
-        const text = await chat(cfg, WIKI_SYSTEM, `SOURCE TERM: ${data.source}\n\nWIKI EXCERPTS:\n${wikiPromptSection(w)}`);
-        const s = text.indexOf('{'), e = text.lastIndexOf('}');
-        const found = s >= 0 && e > s ? JSON.parse(text.slice(s, e + 1)).renderings || [] : [];
-        list = found.filter((x) => x && typeof x.term === 'string' && x.term.trim())
-          .map((x) => ({ term: x.term.trim(), reason: String(x.reason || ''), url: w.excerpts.find((ex) => ex.page === x.page)?.url }));
+        list = parseRenderings(await chat(cfg, WIKI_SYSTEM, `${wikiContext(data)}WIKI EXCERPTS:\n${wikiPromptSection(w)}`))
+          .map((x) => ({ term: x.term, reason: x.reason, url: w.excerpts.find((ex) => ex.page === x.page)?.url }));
       }
       if (!list.length) { body.replaceChildren(h('div', { class: 'wtrrank-muted' }, 'Nothing found on the wiki for this term.'), askAiButton(data)); return; }
       markChecked(data);
@@ -692,17 +715,23 @@ Respond with JSON only: {"renderings":[{"term":string,"page":string,"reason":str
       h('button', { class: 'wtrrank-action', onclick: () => runRanking(data) }, '🏆 Ask AI'));
   }
 
+  // Already checked in another novel: propose that rendering instead of paying for a lookup. Returns
+  // true when shown. data.force (set by the buttons) skips it for the rest of this flow.
+  function showPrior(data) {
+    const prior = data.force ? [] : priorRenderings(data.hash);
+    if (!prior.length) return false;
+    const body = openPanel(`Already checked: ${data.source || data.current}`, null, () => closeTooltip(data));
+    markChecked(data);
+    renderRows(body, prior.map((term) => ({ term, reason: 'Rendering you kept after checking this term in another novel.' })), data);
+    const forced = { ...data, force: true };
+    body.append(h('div', { class: 'wtrrank-actions' },
+      wikiBases().length && h('button', { class: 'wtrrank-action secondary', onclick: () => runWiki(forced) }, 'Search wiki anyway'),
+      h('button', { class: 'wtrrank-action secondary', onclick: () => runRanking(forced) }, 'Ask AI anyway')));
+    return true;
+  }
+
   async function runRanking(data) {
-    // Already checked in another novel: propose that rendering instead of paying for an AI call.
-    const prior = data.forceAI ? [] : priorRenderings(data.hash);
-    if (prior.length) {
-      const body = openPanel(`Already checked: ${data.source || data.current}`, null, () => closeTooltip(data));
-      markChecked(data);
-      renderRows(body, prior.map((term) => ({ term, reason: 'Rendering you kept after checking this term in another novel.' })), data);
-      body.append(h('div', { class: 'wtrrank-actions' },
-        h('button', { class: 'wtrrank-action secondary', onclick: () => runRanking({ ...data, forceAI: true }) }, 'Ask AI anyway')));
-      return;
-    }
+    if (showPrior(data)) return;
     const cfg = getCfg();
     if (!cfg.key || !cfg.model) return openConfig(() => runRanking(data));
     const body = openPanel(`Tier list: ${data.source || data.current}`, () => openConfig(() => runRanking(data)), () => closeTooltip(data));
