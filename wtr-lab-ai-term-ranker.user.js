@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.7.0
+// @version      1.8.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -19,6 +19,7 @@
 // @connect      api.groq.com
 // @connect      api.x.ai
 // @connect      api.deepseek.com
+// @connect      fandom.com
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -176,7 +177,7 @@ Rules:
 - Include every listed candidate exactly as written (with "new": false).
 - Consistency: REFERENCE TERMS are related terms the user already verified; they define the naming conventions to follow (how names, titles, ranks, sects, techniques and shared characters are rendered). Other translated terms that appear in the CONTEXT but are not in REFERENCE TERMS are unverified machine output and must have NO weight in your decision.
 - Base form only: the chosen term is substituted verbatim everywhere the source appears, and the site itself appends "s" in plural sentences. So the term must be the singular, uninflected base form, independent of whether the CONTEXT sentence is singular or plural. A pluralized or inflected candidate (e.g. "Soul Rings" for 魂环) is wrong: it would produce "Soul Ringss". Score such candidates 0 unless the name is inherently plural. Use the CONTEXT only to understand the meaning, never to pick grammatical number.
-- Official renderings: if the NOVEL belongs to or is fan-fiction of a known franchise (e.g. Soul Land / Douluo Dalu) and the term has an established official or widely accepted English rendering in that franchise, rank that rendering first, even above a more accurate or natural one, and say so in the reason. Add it with "new": true if it is not listed. Apply this only when you are confident the rendering is established; never invent one.
+- Official renderings: if the NOVEL belongs to or is fan-fiction of a known franchise (e.g. Soul Land / Douluo Dalu) and the term has an established official or widely accepted English rendering in that franchise, rank that rendering first, even above a more accurate or natural one, and say so in the reason. Add it with "new": true if it is not listed. Apply this only when you are confident the rendering is established; never invent one. WIKI EVIDENCE, when present, comes from the franchise's fan wiki: a rendering confirmed there counts as established (still use its singular base form).
 - Otherwise judge accuracy to the source meaning, fit with the context, consistency with REFERENCE TERMS, and naturalness in English.
 - "reason": one short sentence explaining why this term got this position and score.
 - Order the array from highest to lowest score.`;
@@ -194,7 +195,10 @@ CONTEXT:
 ${d.context || '(none)'}
 
 REFERENCE TERMS (source → verified translation):
-${refs}`;
+${refs}${d.wiki ? `
+
+WIKI EVIDENCE (franchise fan wiki):
+${wikiPromptSection(d.wiki)}` : ''}`;
   }
 
   // ---------- page integration ----------
@@ -267,7 +271,13 @@ ${refs}`;
         e.preventDefault(); e.stopPropagation();
         runRanking({ ...readTooltip(root, toLabel), addBtn: btn });
       });
-      btn.after(ours);
+      const wiki = ours.cloneNode(false);
+      wiki.textContent = '📖 Wiki';
+      wiki.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        runWiki({ ...readTooltip(root, toLabel), addBtn: btn });
+      });
+      btn.after(ours, wiki);
     }
 
     // Term editor: "Clear" button next to the Replacement Text label (deleting text is tedious on mobile).
@@ -500,7 +510,8 @@ ${refs}`;
           note,
           scored && h('span', { class: 'wtrrank-score' }, `${x.score}%`)),
         scored && h('div', { class: 'wtrrank-bar' }, h('div', { style: `width:${x.score}%` })),
-        h('div', { class: 'wtrrank-reason' }, x.reason));
+        h('div', { class: 'wtrrank-reason' }, x.reason,
+          x.url && h('a', { href: x.url, target: '_blank', rel: 'noopener', style: 'margin-left:6px;color:#7aa7ff', onclick: (e) => e.stopPropagation() }, 'open page')));
       // Copy, close the list, then open the site's term editor via the tooltip's "+ Term"/"Edit" button.
       const copy = () => {
         GM_setClipboard(x.term, 'text');
@@ -511,6 +522,121 @@ ${refs}`;
       row.addEventListener('keydown', (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), copy()));
       body.append(row);
     });
+  }
+
+  // ---------- fandom wiki lookup ----------
+  // Settings hold one wiki per line: "soulland", "soulland.fandom.com" or a full URL (language paths kept).
+  function wikiBases() {
+    return GM_getValue('wikis', '').split(/\n+/).map((line) => {
+      const s = line.trim();
+      if (!s) return null;
+      const m = s.match(/^(?:https?:\/\/)?([a-z0-9-]+)\.fandom\.com(?:\/([a-z]{2,3}(?:-[a-z]+)?))?(?=\/|$)/i);
+      if (m) return `https://${m[1].toLowerCase()}.fandom.com${m[2] && m[2] !== 'wiki' ? `/${m[2]}` : ''}`;
+      return /^[a-z0-9-]+$/i.test(s) ? `https://${s.toLowerCase()}.fandom.com` : null;
+    }).filter(Boolean);
+  }
+
+  const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Wikitext → readable text: unwrap links, drop refs/tags/bold markup.
+  const cleanWikitext = (t) => t
+    .replace(/<ref[^>]*\/>|<ref[^>]*>[\s\S]*?<\/ref>/gi, '')
+    .replace(/\[\[(?:[^\]|]*\|)?([^\]]*)\]\]/g, '$1')
+    .replace(/'{2,}/g, '')
+    .replace(/<\/?(?:sup|small|span|b|i|br\s*\/?)[^>]*>/gi, ' ');
+
+  const wikiCache = new Map(); // source → Promise<result>, so Wiki and AI Rank share one lookup
+
+  // Search every wiki with the source and the candidates, read the top pages and look for the source.
+  // evident: the source is a whole infobox value (→ page title) or written "English (源)" (→ that English).
+  // excerpts: text around the source/candidates for the AI when nothing is evident.
+  function wikiLookup(data) {
+    const key = data.hash || data.source;
+    if (!wikiCache.has(key)) wikiCache.set(key, wikiLookupUncached(key, data.candidates).catch((err) => { wikiCache.delete(key); throw err; }));
+    return wikiCache.get(key);
+  }
+
+  async function wikiLookupUncached(src, candidates) {
+    const evident = [], excerpts = [];
+    const infobox = new RegExp(`\\|\\s*[\\w ]+?\\s*=\\s*${escapeRe(src)}\\s*(?=\\||}}|\\n|$)`);
+    // Capitalized name (small linking words allowed) right before "(源)", so sentence words aren't captured.
+    const alias = new RegExp(`([A-Z][\\w'’-]*(?:\\s+(?:[A-Z][\\w'’-]*|of|the|and|in|to)){0,5})\\s*[（(]\\s*${escapeRe(src)}\\s*[)）]`);
+    for (const base of wikiBases()) {
+      const queries = [src, ...candidates.slice(0, 5)];
+      const searches = await Promise.all(queries.map((q) => gm('GET', `${base}/api.php?action=query&list=search&srlimit=5&format=json&srsearch=${encodeURIComponent(q)}`)
+        .then((r) => (r.query?.search || []).map((x) => x.title)).catch(() => [])));
+      const titles = [...new Set(searches.flat())].slice(0, 8);
+      if (!titles.length) continue;
+      const r = await gm('GET', `${base}/api.php?action=query&prop=revisions&rvprop=content&rvslots=main&redirects=1&format=json&formatversion=2&titles=${encodeURIComponent(titles.join('|'))}`);
+      const pages = (r.query?.pages || []).filter((p) => p.revisions).sort((a, b) => titles.indexOf(a.title) - titles.indexOf(b.title));
+      for (const p of pages) {
+        const raw = p.revisions[0].slots?.main?.content || '';
+        const url = `${base}/wiki/${encodeURIComponent(p.title.replace(/ /g, '_'))}`;
+        const text = cleanWikitext(raw);
+        if (infobox.test(raw)) {
+          // Page titles carry disambiguation ("Tang San (SL5)") and are sometimes plural ("Soul Rings").
+          // Drop disambiguation ("Tang San (SL5)") and subpage parts ("Shrek Academy/Soul Land III").
+          evident.push({ term: p.title.split('/')[0].replace(/\s*\([^)]*\)\s*$/, ''), url, reason: `"${p.title}" page lists ${src} as its Chinese name.` });
+        }
+        const a = text.match(alias);
+        if (a) evident.push({ term: a[1].trim().replace(/^The\s+/, ''), url, reason: `Written "${a[1].trim()} (${src})" on the "${p.title}" page.` });
+        // Up to 3 non-overlapping windows per page around the source or a candidate, for the AI fallback.
+        const taken = [];
+        for (const needle of [src, ...candidates].filter(Boolean)) {
+          const i = text.indexOf(needle);
+          if (i < 0 || taken.length >= 3 || taken.some((j) => Math.abs(j - i) < 400)) continue;
+          taken.push(i);
+          excerpts.push({ page: p.title, url, text: text.slice(Math.max(0, i - 200), i + 200).replace(/\s+/g, ' ').trim() });
+        }
+      }
+    }
+    // Wiki titles/aliases are sometimes plural ("Soul Rings"): use the singular when a candidate or another
+    // hit already has it, otherwise flag it. Then merge duplicates.
+    const known = new Set([...candidates, ...evident.map((x) => x.term)]);
+    for (const x of evident) {
+      if (!/[^s]s$/.test(x.term)) continue;
+      if (known.has(x.term.slice(0, -1))) x.term = x.term.slice(0, -1);
+      else x.reason += ' Plural on the wiki; the term may need its singular form.';
+    }
+    const seen = new Set();
+    return {
+      evident: evident.filter((x) => !seen.has(x.term) && seen.add(x.term)),
+      excerpts: excerpts.slice(0, 10), // ~4k chars max keeps the AI call cheap
+    };
+  }
+
+  const WIKI_SYSTEM = `You read excerpts from a franchise fan wiki and find the established English rendering of one Chinese term.
+Respond with JSON only: {"renderings":[{"term":string,"page":string,"reason":string}]}
+- Only report renderings the excerpts actually support for this exact source term; return {"renderings":[]} if none.
+- Give the singular base form (the reader adds plural "s" itself).
+- "reason": one short sentence quoting the evidence.`;
+
+  const wikiPromptSection = (w) => (w.evident.length
+    ? w.evident.map((x) => `Confirmed on wiki: ${x.term} (${x.reason})`).join('\n')
+    : w.excerpts.map((x) => `[${x.page}] ${x.text}`).join('\n') || '(nothing found)');
+
+  async function runWiki(data) {
+    if (!wikiBases().length) return openConfig(() => runWiki(data));
+    const body = openPanel(`Wiki: ${data.source || data.current}`, () => openConfig(() => runWiki(data)), () => closeTooltip(data));
+    body.append(h('div', { class: 'wtrrank-muted' }, 'Searching the wiki…'));
+    try {
+      const w = await wikiLookup(data);
+      let list = w.evident;
+      if (!list.length && w.excerpts.length) {
+        const cfg = getCfg();
+        if (!cfg.key || !cfg.model) throw new Error('Nothing evident on the wiki, and no AI is configured to read the pages.');
+        body.replaceChildren(h('div', { class: 'wtrrank-muted' }, `Nothing evident. Asking ${cfg.model} to read ${w.excerpts.length} excerpts…`));
+        const text = await chat(cfg, WIKI_SYSTEM, `SOURCE TERM: ${data.source}\n\nWIKI EXCERPTS:\n${wikiPromptSection(w)}`);
+        const s = text.indexOf('{'), e = text.lastIndexOf('}');
+        const found = s >= 0 && e > s ? JSON.parse(text.slice(s, e + 1)).renderings || [] : [];
+        list = found.filter((x) => x && typeof x.term === 'string' && x.term.trim())
+          .map((x) => ({ term: x.term.trim(), reason: String(x.reason || ''), url: w.excerpts.find((ex) => ex.page === x.page)?.url }));
+      }
+      if (!list.length) { body.replaceChildren(h('div', { class: 'wtrrank-muted' }, 'Nothing found on the wiki for this term.')); return; }
+      markChecked(data);
+      renderRows(body, list, data);
+    } catch (err) {
+      body.replaceChildren(h('div', { class: 'wtrrank-err' }, String(err.message || err)));
+    }
   }
 
   async function runRanking(data) {
@@ -527,9 +653,12 @@ ${refs}`;
     const cfg = getCfg();
     if (!cfg.key || !cfg.model) return openConfig(() => runRanking(data));
     const body = openPanel(`Tier list: ${data.source || data.current}`, () => openConfig(() => runRanking(data)), () => closeTooltip(data));
-    body.append(h('div', { class: 'wtrrank-muted' }, `Asking ${cfg.model}…`));
+    body.append(h('div', { class: 'wtrrank-muted' }, wikiBases().length ? 'Searching the wiki…' : `Asking ${cfg.model}…`));
     try {
-      const list = normalize(parseRanking(await chat(cfg, SYSTEM, buildPrompt(data)), data.candidates));
+      // Wiki evidence is optional: a failed lookup must not block the ranking.
+      const wiki = wikiBases().length ? await wikiLookup(data).catch(() => null) : null;
+      body.replaceChildren(h('div', { class: 'wtrrank-muted' }, `Asking ${cfg.model}…`));
+      const list = normalize(parseRanking(await chat(cfg, SYSTEM, buildPrompt({ ...data, wiki })), data.candidates));
       markChecked(data);
       renderRows(body, list, data);
     } catch (err) {
@@ -546,6 +675,10 @@ ${refs}`;
     const select = h('select', { class: 'wtrrank-input' });
     const manual = h('input', { class: 'wtrrank-input', placeholder: 'Model name (used if not empty)' });
     manual.value = cfg.model;
+    const wikisIn = h('textarea', { class: 'wtrrank-input', rows: '3', placeholder: 'soulland\nhttps://otherwiki.fandom.com' });
+    wikisIn.value = GM_getValue('wikis', '');
+    const saveWikis = () => GM_setValue('wikis', wikisIn.value.trim());
+    wikisIn.addEventListener('change', saveWikis); // saved on its own: no API key needed for evident wiki hits
 
     async function load() {
       const p = detectProvider(keyIn.value);
@@ -573,11 +706,14 @@ ${refs}`;
       h('label', { class: 'wtrrank-field' }, 'API key'), keyIn, status,
       h('label', { class: 'wtrrank-field' }, 'Model'), select,
       h('label', { class: 'wtrrank-field' }, 'Or type a model name'), manual,
+      h('label', { class: 'wtrrank-field' }, 'Fandom wikis (one per line)'), wikisIn,
+      h('div', { class: 'wtrrank-muted' }, 'Wiki name or URL, e.g. "soulland" for soulland.fandom.com.'),
       h('div', { class: 'wtrrank-actions' },
         h('button', { class: 'wtrrank-action secondary', onclick: load }, 'Reload models'),
         h('button', {
           class: 'wtrrank-action',
           onclick: () => {
+            saveWikis();
             const model = manual.value.trim() || select.value;
             if (!detectProvider(keyIn.value)) return (status.textContent = 'Unrecognized key format.');
             if (!model) return (status.textContent = 'Choose or type a model.');
@@ -589,13 +725,13 @@ ${refs}`;
         }, 'Save')),
       h('div', { class: 'wtrrank-actions', style: 'justify-content:flex-start;border-top:1px solid #3a3d42;padding-top:12px' },
         h('button', { class: 'wtrrank-action danger', onclick: resetData }, 'Reset saved data')),
-      h('div', { class: 'wtrrank-muted' }, 'Deletes every checked term in all novels. Keeps the API key and model.'));
+      h('div', { class: 'wtrrank-muted' }, 'Deletes every checked term in all novels. Keeps the API key, model and wikis.'));
     if (cfg.key) load();
   }
 
   function resetData() {
-    if (!confirm('Delete all checked terms in every novel? The API key and model are kept. This cannot be undone.')) return;
-    for (const k of GM_listValues()) if (k !== 'apiKey' && k !== 'model') GM_deleteValue(k);
+    if (!confirm('Delete all checked terms in every novel? The API key, model and wikis are kept. This cannot be undone.')) return;
+    for (const k of GM_listValues()) if (!['apiKey', 'model', 'wikis'].includes(k)) GM_deleteValue(k);
     for (const k of Object.keys(checked)) delete checked[k];
     renderTermColors();
     document.querySelector('.wtrrank-overlay')?.remove();
