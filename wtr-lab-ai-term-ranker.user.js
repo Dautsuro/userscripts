@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.1.1
+// @version      1.2.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -222,7 +222,8 @@ ${saved}`;
       ...chips.map(chipText),
       current,
     ].filter(Boolean))].sort((a, b) => a.localeCompare(b)); // sorted so list position can't hint which one is selected
-    return { source, current, candidates, context: contextAround(lastClicked, source, current), saved: savedTerms() };
+    const hash = lastClicked?.closest('.text-patch')?.dataset.hash || '';
+    return { source, current, hash, candidates, context: contextAround(lastClicked, source, current), saved: savedTerms() };
   }
 
   function scan() {
@@ -256,6 +257,26 @@ ${saved}`;
     queued = true;
     setTimeout(() => { queued = false; scan(); }, 50);
   }).observe(document.body, { childList: true, subtree: true });
+
+  // ---------- term colors ----------
+  // Unchecked terms get WTR-LAB's term color; terms already ranked by the AI go back to plain text.
+  // Pure CSS keyed on data-hash (hash of the source text), so React-owned spans are never touched.
+  // html/body prefix outranks the site's `.chapter-body.term-color-disabled .text-patch` !important rule.
+  const checked = GM_getValue('checkedHashes', {});
+  const termStyle = document.createElement('style');
+  document.head.append(termStyle);
+  function renderTermColors() {
+    const done = Object.keys(checked).map((h) => `html body .chapter-body .text-patch[data-hash="${CSS.escape(h)}"]`);
+    termStyle.textContent = 'html body .chapter-body .text-patch[data-hash] { color: var(--wtr-term-color) !important; }'
+      + (done.length ? `\n${done.join(',\n')} { color: inherit !important; }` : '');
+  }
+  function markChecked(hash) {
+    if (!hash || checked[hash]) return;
+    checked[hash] = 1;
+    GM_setValue('checkedHashes', checked);
+    renderTermColors();
+  }
+  renderTermColors();
 
   // ---------- UI ----------
   GM_addStyle(`
@@ -321,6 +342,7 @@ ${saved}`;
     body.append(h('div', { class: 'wtrrank-muted' }, `Asking ${cfg.model}…`));
     try {
       const list = normalize(parseRanking(await chat(cfg, SYSTEM, buildPrompt(data))));
+      markChecked(data.hash);
       body.replaceChildren(h('div', { class: 'wtrrank-muted', style: 'margin-bottom:8px' }, 'Tap a term to copy it.'));
       list.forEach((x, i) => {
         const note = h('span', { class: 'wtrrank-copied' });
