@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.1.0
+// @version      1.2.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -198,8 +198,16 @@ ${refs}`;
 
   // ---------- page integration ----------
   let lastClicked = null;
+  let bypassOnce = false; // let the next tap on a picked term reach WTR-LAB's own tooltip
+  let forceRank = false; // next AI Rank skips the "Already checked" panel
   document.addEventListener('click', (e) => {
-    if (e.target.closest && e.target.closest('.chapter-body')) lastClicked = e.target;
+    if (!(e.target.closest && e.target.closest('.chapter-body'))) return;
+    lastClicked = e.target;
+    // Terms picked with this script get our popover instead of the site's (capture phase runs before React's).
+    const el = e.target.closest('.text-patch[data-hash]');
+    if (!el || bypassOnce || !(el.dataset.hash in localTerms())) { bypassOnce = false; return; }
+    e.preventDefault(); e.stopPropagation();
+    openTermPopover(el);
   }, true);
 
   // Term elements showing the selected translation are replaced by ⟦source⟧ so the AI never sees the current choice.
@@ -223,6 +231,8 @@ ${refs}`;
   const exactText = (root, txt) => [...root.querySelectorAll('div,span,label')]
     .find((x) => x.textContent.trim() === txt && ![...x.children].some((c) => c.textContent.trim() === txt));
 
+  const novelTitle = () => document.title.replace(/\s+Chapter\s+\d+.*$/i, '').replace(/(^|\s*-\s*)WTR-LAB\s*$/i, '').trim(); // franchise hint for official renderings
+
   function readTooltip(root, toLabel) {
     const source = ((root.innerText || '').match(/From\s+([^\n]+)/) || [])[1]?.trim() || '';
     // Alternatives list is rendered next to the column holding the "To" label.
@@ -240,8 +250,7 @@ ${refs}`;
     ].filter(Boolean))].sort((a, b) => a.localeCompare(b)); // sorted so list position can't hint which one is selected
     const trigger = lastClicked?.closest('.text-patch') || null;
     const hash = trigger?.dataset.hash || '';
-    const novel = document.title.replace(/\s+Chapter\s+\d+.*$/i, '').replace(/(^|\s*-\s*)WTR-LAB\s*$/i, '').trim(); // franchise hint for official renderings
-    return { source, current, hash, trigger, novel, candidates, context: contextAround(lastClicked, source, current), refs: referenceTerms(hash || source) };
+    return { source, current, hash, trigger, novel: novelTitle(), candidates, context: contextAround(lastClicked, source, current), refs: referenceTerms(hash || source) };
   }
 
   function scan() {
@@ -264,7 +273,8 @@ ${refs}`;
       ours.textContent = '🏆 AI Rank';
       ours.addEventListener('click', (e) => {
         e.preventDefault(); e.stopPropagation();
-        runRanking(readTooltip(root, toLabel));
+        runRanking({ ...readTooltip(root, toLabel), force: forceRank });
+        forceRank = false;
       });
       btn.after(ours);
     }
@@ -301,12 +311,14 @@ ${refs}`;
   // ---------- local terms ----------
   // Picked renderings live in the script, never in WTR-LAB's term system: { serie: { hash: term } }.
   // The same rendering picked in GLOBAL_MIN novels applies to every novel; a novel's own pick wins.
+  // A null pick means "not in this novel": it hides a global term there and is never counted.
   const GLOBAL_MIN = 5;
   const picked = GM_getValue('pickedTerms', {});
   function globalPicks(store = picked) {
     const counts = new Map(), best = {}, out = {};
     for (const novel of Object.values(store)) {
       for (const [hash, term] of Object.entries(novel)) {
+        if (!term) continue;
         const n = (counts.get(`${hash} ${term}`) || 0) + 1;
         counts.set(`${hash} ${term}`, n);
         if (n >= GLOBAL_MIN && n > (best[hash] || 0)) { best[hash] = n; out[hash] = term; }
@@ -315,25 +327,42 @@ ${refs}`;
     return out;
   }
 
+  // Terms that apply in this novel (null = opted out of a global one).
+  const localTerms = () => Object.fromEntries(Object.entries({ ...globalPicks(), ...picked[currentSerie()] }).filter(([, t]) => t));
+
   // Rewrite term spans in place. The site puts the plural "s" outside the span, so the whole text is the term.
+  // The site's text is kept in data-wtrrank-orig to put it back when a pick is deleted.
   function applyLocalTerms() {
-    const terms = { ...globalPicks(), ...picked[currentSerie()] };
+    const terms = localTerms();
     for (const el of document.querySelectorAll('.chapter-body .text-patch[data-hash]')) {
-      const term = terms[el.dataset.hash];
+      const orig = el.dataset.wtrrankOrig;
+      const term = terms[el.dataset.hash] || orig;
       if (!term || el.textContent === term) continue;
+      if (orig == null) el.dataset.wtrrankOrig = el.textContent;
+      else if (term === orig) delete el.dataset.wtrrankOrig;
       // Keep React's own text node when possible, so its later updates still land on what we watch.
       if (el.childNodes.length === 1 && el.firstChild.nodeType === Node.TEXT_NODE) el.firstChild.data = term;
       else el.textContent = term;
     }
   }
 
+  // term: a rendering, null (hide a global term here) or undefined (drop this novel's pick).
   function pickTerm(data, term) {
     const serie = currentSerie();
     if (!data.hash || !serie) return;
-    (picked[serie] ||= {})[data.hash] = term;
+    const mine = (picked[serie] ||= {});
+    if (term === undefined) delete mine[data.hash]; else mine[data.hash] = term;
     GM_setValue('pickedTerms', picked);
     applyLocalTerms();
-    markChecked({ ...data, current: term });
+    if (term) markChecked({ ...data, current: term });
+    else renderTermColors();
+  }
+
+  // Novels per rendering of one source, most used first, for the term popover.
+  function pickCounts(hash) {
+    const counts = {};
+    for (const novel of Object.values(picked)) if (novel[hash]) counts[novel[hash]] = (counts[novel[hash]] || 0) + 1;
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
   }
 
   // ---------- term colors ----------
@@ -449,6 +478,8 @@ ${refs}`;
     .wtrrank-action { background: #2f6fde; color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; font-size: 14px; cursor: pointer; }
     .wtrrank-action.secondary { background: #3a3d42; }
     .wtrrank-action.danger { background: #b3261e; }
+    .wtrrank-pop { position: absolute; z-index: 2147482000; box-sizing: border-box; max-width: calc(100vw - 16px); }
+    .wtrrank-pop-input { width: 100%; box-sizing: border-box; border-radius: 6px; padding: 4px 6px; font: inherit; color: inherit; }
   `);
 
   function h(tag, props = {}, ...kids) {
@@ -487,6 +518,63 @@ ${refs}`;
 
   const sameTerm = (a, b) => !!a && !!b && a.trim() === b.trim(); // case-sensitive: "pill" and "Pill" are different terms
   const getCfg = () => ({ key: GM_getValue('apiKey', ''), model: GM_getValue('model', '') });
+
+  // ---------- term popover ----------
+  // Replaces WTR-LAB's tooltip on picked terms. Classes are the site's own (Tailwind), so it follows its theme.
+  const SITE_BTN = 'inline-flex cursor-pointer shrink-0 items-center justify-center font-medium whitespace-nowrap transition-all select-none border border-border bg-card hover:bg-muted hover:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50 h-7 gap-1 rounded-[min(var(--radius-md),12px)] text-[0.8rem] px-2';
+  let pop = null;
+  const closePop = () => { pop?.remove(); pop = null; };
+  document.addEventListener('pointerdown', (e) => { if (pop && !pop.contains(e.target)) closePop(); }, true);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePop(); });
+
+  function openTermPopover(el) {
+    closePop();
+    const hash = el.dataset.hash, serie = currentSerie();
+    const term = localTerms()[hash], local = picked[serie]?.[hash], global = globalPicks()[hash];
+    const counts = pickCounts(hash);
+    const scope = local ? (global && global !== local ? `This novel (global is "${global}")` : 'This novel')
+      : `Global, picked in ${counts.find(([t]) => t === global)?.[1] || 0} novels`;
+    const data = { hash, source: hash };
+    const input = h('input', { class: 'wtrrank-pop-input border border-border bg-card', value: term, autocomplete: 'off', 'aria-label': 'Term' });
+    const save = () => { const v = input.value.trim(); if (v) pickTerm(data, v); closePop(); };
+    input.addEventListener('keydown', (e) => e.key === 'Enter' && save());
+    const row = (label, ...value) => h('div', { class: 'flex items-baseline gap-2' },
+      h('div', { class: 'min-w-14 px-1 font-semibold text-right text-xs shrink-0' }, label), h('div', { class: 'min-w-0 flex-1 break-words' }, ...value));
+    const others = counts.filter(([t]) => t !== term).map(([t, n]) => `${t} (${n})`).join(', ');
+    pop = h('div', { class: 'wtrrank-pop flex flex-col gap-2 rounded-lg bg-popover text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 p-2 w-80 chapter-theme', role: 'dialog', 'aria-label': `Term ${hash}` },
+      row('From', h('span', { class: 'text-muted-foreground' }, hash)),
+      row('To', input),
+      row('Scope', scope),
+      el.dataset.wtrrankOrig && row('WTR-LAB', h('span', { class: 'text-muted-foreground' }, el.dataset.wtrrankOrig)),
+      others && row('Elsewhere', h('span', { class: 'text-muted-foreground' }, others)),
+      h('div', { class: 'flex flex-wrap gap-2 justify-end' },
+        h('button', { type: 'button', class: SITE_BTN, onclick: save }, 'Save'),
+        h('button', { type: 'button', class: SITE_BTN, onclick: () => viaSiteTooltip(el, true) }, '🏆 AI Rank'),
+        // Without a local pick only "hide here" makes sense: the global rendering comes from other novels.
+        h('button', { type: 'button', class: SITE_BTN, onclick: () => { pickTerm(data, local ? undefined : null); closePop(); } }, local ? 'Delete' : 'Not in this novel'),
+        h('button', { type: 'button', class: SITE_BTN, onclick: () => viaSiteTooltip(el, false) }, 'WTR-LAB')));
+    document.body.append(pop);
+    // Above the term like the site's tooltip, below when there is no room; kept inside the viewport.
+    const r = el.getBoundingClientRect(), w = pop.offsetWidth, ph = pop.offsetHeight;
+    const top = r.top - ph - 6 >= 0 ? r.top - ph - 6 : r.bottom + 6;
+    pop.style.top = `${top + scrollY}px`;
+    pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - w - 8)) + scrollX}px`;
+  }
+
+  // Open the site's tooltip for this term; with rank, also press our AI Rank button once it's injected.
+  // Candidates come from that tooltip, which is why ranking goes through it.
+  function viaSiteTooltip(el, rank) {
+    closePop();
+    bypassOnce = true;
+    el.click();
+    if (!rank) return;
+    const started = Date.now();
+    const tick = () => {
+      const btn = document.querySelector('[data-slot="popover-content"] .wtrrank-btn');
+      if (btn) { forceRank = true; btn.click(); } else if (Date.now() - started < 3000) setTimeout(tick, 50);
+    };
+    tick();
+  }
 
   // Rows for the result panel; items without a score (prior renderings) get no % or bar.
   function renderRows(body, list, data) {
@@ -619,6 +707,7 @@ ${refs}`;
   console.assert(normalize([{ score: 1 }, { score: 1 }, { score: 1 }]).reduce((a, x) => a + x.score, 0) === 100, 'wtrrank: sum 100');
   console.assert(normalize([{ score: 0 }, { score: 0 }]).every((x) => x.score === 0), 'wtrrank: zeros');
   const store = Object.fromEntries([1, 2, 3, 4, 5, 6].map((n) => [n, { 源: n <= 5 ? 'A' : 'B', 二: n <= 4 ? 'C' : 'D' }]));
+  store[6].二 = null;
   console.assert(globalPicks(store).源 === 'A' && !('二' in globalPicks(store)), 'wtrrank: global after 5 novels');
   console.assert(parseRanking('```json\n{"ranking":[{"term":"A","score":60,"reason":"r"}]}\n```')[0].score === 60, 'wtrrank: parse');
   const dup = parseRanking('{"ranking":[{"term":"A","score":30,"new":true,"reason":"x"},{"term":"A","score":40,"reason":"y"},{"term":"a","score":30,"new":false}]}', ['A']);
