@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.2.0
+// @version      1.3.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -199,7 +199,6 @@ ${refs}`;
   // ---------- page integration ----------
   let lastClicked = null;
   let bypassOnce = false; // let the next tap on a picked term reach WTR-LAB's own tooltip
-  let forceRank = false; // next AI Rank skips the "Already checked" panel
   document.addEventListener('click', (e) => {
     if (!(e.target.closest && e.target.closest('.chapter-body'))) return;
     lastClicked = e.target;
@@ -273,8 +272,7 @@ ${refs}`;
       ours.textContent = '🏆 AI Rank';
       ours.addEventListener('click', (e) => {
         e.preventDefault(); e.stopPropagation();
-        runRanking({ ...readTooltip(root, toLabel), force: forceRank });
-        forceRank = false;
+        runRanking(readTooltip(root, toLabel));
       });
       btn.after(ours);
     }
@@ -310,22 +308,27 @@ ${refs}`;
 
   // ---------- local terms ----------
   // Picked renderings live in the script, never in WTR-LAB's term system: { serie: { hash: term } }.
-  // The same rendering picked in GLOBAL_MIN novels applies to every novel; a novel's own pick wins.
-  // A null pick means "not in this novel": it hides a global term there and is never counted.
-  const GLOBAL_MIN = 5;
+  // Global terms apply to every novel; a novel's own pick wins. A null pick means "not in this novel":
+  // it hides a global term there and is never counted.
+  // Status per source, decided once and kept in termStatus ({ hash: { global: term } | { dynamic: true } }):
+  // 5 novels all with the same rendering → global; otherwise at 10 novels, 9+ the same → global, else
+  // dynamic (depends on context: never global, always checked).
   const picked = GM_getValue('pickedTerms', {});
-  function globalPicks(store = picked) {
-    const counts = new Map(), best = {}, out = {};
-    for (const novel of Object.values(store)) {
-      for (const [hash, term] of Object.entries(novel)) {
-        if (!term) continue;
-        const n = (counts.get(`${hash} ${term}`) || 0) + 1;
-        counts.set(`${hash} ${term}`, n);
-        if (n >= GLOBAL_MIN && n > (best[hash] || 0)) { best[hash] = n; out[hash] = term; }
-      }
-    }
-    return out;
+  const termStatus = GM_getValue('termStatus', {});
+  function decideStatus(terms) {
+    const counts = {};
+    for (const t of terms) counts[t] = (counts[t] || 0) + 1;
+    const [top, same] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0] || [];
+    if (terms.length >= 5 && same === terms.length) return { global: top };
+    if (terms.length >= 10) return same > 8 ? { global: top } : { dynamic: true };
+    return null;
   }
+  function updateStatus(hash) {
+    if (termStatus[hash]) return;
+    const status = decideStatus(Object.values(picked).map((novel) => novel[hash]).filter(Boolean));
+    if (status) { termStatus[hash] = status; GM_setValue('termStatus', termStatus); }
+  }
+  const globalPicks = () => Object.fromEntries(Object.entries(termStatus).filter(([, s]) => s.global).map(([h, s]) => [h, s.global]));
 
   // Terms that apply in this novel (null = opted out of a global one).
   const localTerms = () => Object.fromEntries(Object.entries({ ...globalPicks(), ...picked[currentSerie()] }).filter(([, t]) => t));
@@ -353,6 +356,7 @@ ${refs}`;
     const mine = (picked[serie] ||= {});
     if (term === undefined) delete mine[data.hash]; else mine[data.hash] = term;
     GM_setValue('pickedTerms', picked);
+    updateStatus(data.hash);
     applyLocalTerms();
     if (term) markChecked({ ...data, current: term });
     else renderTermColors();
@@ -443,11 +447,12 @@ ${refs}`;
     return out;
   }
 
-  // Renderings chosen for this exact source in other novels.
-  function priorRenderings(hash) {
+  // Renderings picked for this exact source in other novels.
+  function previousPicks(hash) {
     const serie = currentSerie();
-    return [...new Set(Object.entries(checked).filter(([n]) => n !== serie).map(([, novel]) => novel[hash]).filter((r) => knownRendering(hash, r)))];
+    return [...new Set(Object.entries(picked).filter(([n]) => n !== serie).map(([, novel]) => novel[hash]).filter(Boolean))];
   }
+  for (const novel of Object.values(picked)) Object.keys(novel).forEach(updateStatus); // picks saved before statuses existed
   applyLocalTerms();
   renderTermColors();
 
@@ -467,6 +472,7 @@ ${refs}`;
     .wtrrank-term { font-weight: 600; flex: 1; word-break: break-word; }
     .wtrrank-tag { font-size: 11px; background: #1e7e34; color: #fff; border-radius: 4px; padding: 1px 5px; }
     .wtrrank-tag.current { background: #2f6fde; }
+    .wtrrank-tag.previous { background: #4a4f57; }
     .wtrrank-bar { height: 4px; background: #3a3d42; border-radius: 2px; margin: 6px 0 4px; overflow: hidden; }
     .wtrrank-bar > div { height: 100%; background: #4a7bd0; }
     .wtrrank-reason { color: #aab; font-size: 12.5px; }
@@ -532,8 +538,9 @@ ${refs}`;
     const hash = el.dataset.hash, serie = currentSerie();
     const term = localTerms()[hash], local = picked[serie]?.[hash], global = globalPicks()[hash];
     const counts = pickCounts(hash);
-    const scope = local ? (global && global !== local ? `This novel (global is "${global}")` : 'This novel')
-      : `Global, picked in ${counts.find(([t]) => t === global)?.[1] || 0} novels`;
+    const scope = termStatus[hash]?.dynamic ? 'This novel (dynamic: always checked)'
+      : local ? (global && global !== local ? `This novel (global is "${global}")` : 'This novel')
+        : `Global, picked in ${counts.find(([t]) => t === global)?.[1] || 0} novels`;
     const data = { hash, source: hash };
     const input = h('input', { class: 'wtrrank-pop-input border border-border bg-card', value: term, autocomplete: 'off', 'aria-label': 'Term' });
     const save = () => { const v = input.value.trim(); if (v) pickTerm(data, v); closePop(); };
@@ -571,25 +578,25 @@ ${refs}`;
     const started = Date.now();
     const tick = () => {
       const btn = document.querySelector('[data-slot="popover-content"] .wtrrank-btn');
-      if (btn) { forceRank = true; btn.click(); } else if (Date.now() - started < 3000) setTimeout(tick, 50);
+      if (btn) btn.click(); else if (Date.now() - started < 3000) setTimeout(tick, 50);
     };
     tick();
   }
 
-  // Rows for the result panel; items without a score (prior renderings) get no % or bar.
+  // Rows for the result panel.
   function renderRows(body, list, data) {
     body.replaceChildren(h('div', { class: 'wtrrank-muted', style: 'margin-bottom:8px' },
       'Tap a term to use it in this novel.'));
     list.forEach((x, i) => {
-      const scored = typeof x.score === 'number';
       const row = h('div', { class: 'wtrrank-row', tabindex: '0', role: 'button' },
         h('div', { class: 'wtrrank-top' },
           h('span', { class: 'wtrrank-muted' }, `#${i + 1}`),
           h('span', { class: 'wtrrank-term' }, x.term),
           x.isNew && h('span', { class: 'wtrrank-tag', title: 'Proposed by the AI' }, 'NEW'),
           sameTerm(x.term, data.current) && h('span', { class: 'wtrrank-tag current', title: 'Currently selected in the text' }, 'CURRENT'),
-          scored && h('span', { class: 'wtrrank-score' }, `${x.score}%`)),
-        scored && h('div', { class: 'wtrrank-bar' }, h('div', { style: `width:${x.score}%` })),
+          data.previous?.includes(x.term) && h('span', { class: 'wtrrank-tag previous', title: 'Picked in another novel' }, 'PREVIOUS'),
+          h('span', { class: 'wtrrank-score' }, `${x.score}%`)),
+        h('div', { class: 'wtrrank-bar' }, h('div', { style: `width:${x.score}%` })),
         h('div', { class: 'wtrrank-reason' }, x.reason));
       // Use it in the text right away, then close the list and the term's tooltip.
       const pick = () => {
@@ -603,22 +610,11 @@ ${refs}`;
     });
   }
 
-  // Already checked in another novel: propose that rendering instead of paying for a lookup. Returns
-  // true when shown. data.force (set by the buttons) skips it for the rest of this flow.
-  function showPrior(data) {
-    const prior = data.force ? [] : priorRenderings(data.hash);
-    if (!prior.length) return false;
-    const body = openPanel(`Already checked: ${data.source || data.current}`, null, () => closeTooltip(data));
-    markChecked(data);
-    renderRows(body, prior.map((term) => ({ term, reason: 'Rendering you kept after checking this term in another novel.' })), data);
-    const forced = { ...data, force: true };
-    body.append(h('div', { class: 'wtrrank-actions' },
-      h('button', { class: 'wtrrank-action secondary', onclick: () => runRanking(forced) }, 'Ask AI anyway')));
-    return true;
-  }
-
+  // Picks from other novels join the candidates (sorted, unmarked: the AI must not know they were chosen)
+  // and only get a PREVIOUS badge in the result list.
   async function runRanking(data) {
-    if (showPrior(data)) return;
+    const previous = previousPicks(data.hash);
+    data = { ...data, previous, candidates: [...new Set([...data.candidates, ...previous])].sort((a, b) => a.localeCompare(b)) };
     const cfg = getCfg();
     if (!cfg.key || !cfg.model) return openConfig(() => runRanking(data));
     const body = openPanel(`Tier list: ${data.source || data.current}`, () => openConfig(() => runRanking(data)), () => closeTooltip(data));
@@ -693,6 +689,7 @@ ${refs}`;
     for (const k of GM_listValues()) if (!['apiKey', 'model'].includes(k)) GM_deleteValue(k);
     for (const k of Object.keys(checked)) delete checked[k];
     for (const k of Object.keys(picked)) delete picked[k]; // the page keeps showing picks until reload
+    for (const k of Object.keys(termStatus)) delete termStatus[k];
     renderTermColors();
     document.querySelector('.wtrrank-overlay')?.remove();
   }
@@ -706,9 +703,10 @@ ${refs}`;
   console.assert(detectProvider('AIzaXYZ').id === 'gemini', 'wtrrank: gemini');
   console.assert(normalize([{ score: 1 }, { score: 1 }, { score: 1 }]).reduce((a, x) => a + x.score, 0) === 100, 'wtrrank: sum 100');
   console.assert(normalize([{ score: 0 }, { score: 0 }]).every((x) => x.score === 0), 'wtrrank: zeros');
-  const store = Object.fromEntries([1, 2, 3, 4, 5, 6].map((n) => [n, { 源: n <= 5 ? 'A' : 'B', 二: n <= 4 ? 'C' : 'D' }]));
-  store[6].二 = null;
-  console.assert(globalPicks(store).源 === 'A' && !('二' in globalPicks(store)), 'wtrrank: global after 5 novels');
+  const many = (a, n, b = '', m = 0) => [...Array(n).fill(a), ...Array(m).fill(b)];
+  console.assert(decideStatus(many('A', 5)).global === 'A' && decideStatus(many('A', 4)) === null, 'wtrrank: global at 5 identical');
+  console.assert(decideStatus(many('A', 4, 'B', 1)) === null && decideStatus(many('A', 8, 'B', 1)) === null, 'wtrrank: mixed waits for 10');
+  console.assert(decideStatus(many('A', 9, 'B', 1)).global === 'A' && decideStatus(many('A', 8, 'B', 2)).dynamic, 'wtrrank: decided at 10');
   console.assert(parseRanking('```json\n{"ranking":[{"term":"A","score":60,"reason":"r"}]}\n```')[0].score === 60, 'wtrrank: parse');
   const dup = parseRanking('{"ranking":[{"term":"A","score":30,"new":true,"reason":"x"},{"term":"A","score":40,"reason":"y"},{"term":"a","score":30,"new":false}]}', ['A']);
   console.assert(dup.length === 2 && dup[0].score === 70 && dup[0].reason === 'y' && !dup[0].isNew && dup[1].isNew, 'wtrrank: merge duplicates, local NEW');
