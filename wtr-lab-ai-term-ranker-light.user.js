@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.3.0
+// @version      1.3.1
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -134,7 +134,11 @@
   function parseRanking(text, candidates = []) {
     const s = text.indexOf('{'), e = text.lastIndexOf('}');
     if (s < 0 || e < s) throw new Error('AI did not return JSON');
-    const list = JSON.parse(text.slice(s, e + 1)).ranking;
+    let list;
+    try { list = JSON.parse(text.slice(s, e + 1)).ranking; } catch (err) {
+      list = looseEntries(text.slice(s + 1, e)); // skip the outer object so its braces don't wrap the entries
+      if (!list.length) throw err;
+    }
     if (!Array.isArray(list)) throw new Error('AI JSON has no "ranking" array');
     const byTerm = new Map();
     for (const x of list) {
@@ -145,6 +149,24 @@
       else { if (score > prev.score) prev.reason = reason; prev.score += score; }
     }
     return [...byTerm.values()];
+  }
+
+  // Fallback for slightly broken AI JSON (missing comma, stray text): parse each innermost {...} on its own.
+  // Braces inside strings are skipped; an entry that still doesn't parse is dropped.
+  function looseEntries(text) {
+    const out = [];
+    let start = -1, inStr = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (inStr) { if (c === '\\') i++; else if (c === '"') inStr = false; continue; }
+      if (c === '"') inStr = true;
+      else if (c === '{') start = i;
+      else if (c === '}' && start >= 0) {
+        try { const x = JSON.parse(text.slice(start, i + 1)); if (x && typeof x.term === 'string') out.push(x); } catch (_) { /* broken entry */ }
+        start = -1;
+      }
+    }
+    return out;
   }
 
   // Scale scores to integers summing to 100 (AI arithmetic drifts); all-zero stays all-zero.
@@ -707,6 +729,8 @@ ${refs}`;
   console.assert(decideStatus(many('A', 5)).global === 'A' && decideStatus(many('A', 4)) === null, 'wtrrank: global at 5 identical');
   console.assert(decideStatus(many('A', 4, 'B', 1)) === null && decideStatus(many('A', 8, 'B', 1)) === null, 'wtrrank: mixed waits for 10');
   console.assert(decideStatus(many('A', 9, 'B', 1)).global === 'A' && decideStatus(many('A', 8, 'B', 2)).dynamic, 'wtrrank: decided at 10');
+  const loose = parseRanking('{"ranking":[{"term":"A","score":60,"reason":"uses {x}"} {"term":"B","score":40,"reason":"r"}]}');
+  console.assert(loose.length === 2 && loose[0].reason === 'uses {x}' && loose[1].score === 40, 'wtrrank: missing comma tolerated');
   console.assert(parseRanking('```json\n{"ranking":[{"term":"A","score":60,"reason":"r"}]}\n```')[0].score === 60, 'wtrrank: parse');
   const dup = parseRanking('{"ranking":[{"term":"A","score":30,"new":true,"reason":"x"},{"term":"A","score":40,"reason":"y"},{"term":"a","score":30,"new":false}]}', ['A']);
   console.assert(dup.length === 2 && dup[0].score === 70 && dup[0].reason === 'y' && !dup[0].isNew && dup[1].isNew, 'wtrrank: merge duplicates, local NEW');
