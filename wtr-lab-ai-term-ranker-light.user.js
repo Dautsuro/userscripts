@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.0.0
+// @version      1.1.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -9,7 +9,6 @@
 // @grant        GM_setValue
 // @grant        GM_listValues
 // @grant        GM_deleteValue
-// @grant        GM_setClipboard
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
 // @connect      api.anthropic.com
@@ -265,7 +264,7 @@ ${refs}`;
       ours.textContent = '🏆 AI Rank';
       ours.addEventListener('click', (e) => {
         e.preventDefault(); e.stopPropagation();
-        runRanking({ ...readTooltip(root, toLabel), addBtn: btn });
+        runRanking(readTooltip(root, toLabel));
       });
       btn.after(ours);
     }
@@ -292,40 +291,50 @@ ${refs}`;
     input.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
-  // Wait for the site's term editor to open, then replace its Replacement Text (never saves:
-  // the user picks This Novel / All Novels and saves).
-  function pasteIntoEditor(term) {
-    const started = Date.now();
-    const tick = () => {
-      const input = document.querySelector('input[placeholder="Text to replace with"]');
-      if (!input) { if (Date.now() - started < 3000) setTimeout(tick, 50); return; }
-      setInputValue(input, term);
-      keepKeyboardClosed(input.closest('[role="dialog"]') || input.form || document.body);
-      // The editor may prefill after mounting; re-apply once if it overwrote us.
-      setTimeout(() => { if (input.isConnected && input.value !== term) setInputValue(input, term); }, 300);
-    };
-    tick();
-  }
-
-  // The editor autofocuses an input, and on phones the keyboard then covers Save. For a moment after
-  // opening, undo any focus on its inputs that the user didn't cause by tapping.
-  function keepKeyboardClosed(dialog) {
-    let userTapped = false;
-    const isField = (el) => el && dialog.contains(el) && el.matches('input:not([type="checkbox"]), textarea');
-    const onDown = (e) => { if (e.target.closest?.('input, textarea')) userTapped = true; };
-    // Polling, not focusin: programmatic focus doesn't always fire events (e.g. unfocused window).
-    const check = () => { if (!userTapped && isField(document.activeElement)) document.activeElement.blur(); };
-    document.addEventListener('pointerdown', onDown, true);
-    check();
-    const timer = setInterval(check, 100);
-    setTimeout(() => { clearInterval(timer); document.removeEventListener('pointerdown', onDown, true); }, 1500);
-  }
   let queued = false;
   new MutationObserver(() => {
     if (queued) return;
     queued = true;
-    setTimeout(() => { queued = false; scan(); syncRenderings(); renderTermColors(); }, 50); // SPA navigation, term edits, newly saved global terms
-  }).observe(document.body, { childList: true, subtree: true });
+    setTimeout(() => { queued = false; scan(); applyLocalTerms(); syncRenderings(); renderTermColors(); }, 50); // SPA navigation, term edits, newly saved global terms
+  }).observe(document.body, { childList: true, subtree: true, characterData: true }); // characterData: React re-rendering a term's text
+
+  // ---------- local terms ----------
+  // Picked renderings live in the script, never in WTR-LAB's term system: { serie: { hash: term } }.
+  // The same rendering picked in GLOBAL_MIN novels applies to every novel; a novel's own pick wins.
+  const GLOBAL_MIN = 5;
+  const picked = GM_getValue('pickedTerms', {});
+  function globalPicks(store = picked) {
+    const counts = new Map(), best = {}, out = {};
+    for (const novel of Object.values(store)) {
+      for (const [hash, term] of Object.entries(novel)) {
+        const n = (counts.get(`${hash} ${term}`) || 0) + 1;
+        counts.set(`${hash} ${term}`, n);
+        if (n >= GLOBAL_MIN && n > (best[hash] || 0)) { best[hash] = n; out[hash] = term; }
+      }
+    }
+    return out;
+  }
+
+  // Rewrite term spans in place. The site puts the plural "s" outside the span, so the whole text is the term.
+  function applyLocalTerms() {
+    const terms = { ...globalPicks(), ...picked[currentSerie()] };
+    for (const el of document.querySelectorAll('.chapter-body .text-patch[data-hash]')) {
+      const term = terms[el.dataset.hash];
+      if (!term || el.textContent === term) continue;
+      // Keep React's own text node when possible, so its later updates still land on what we watch.
+      if (el.childNodes.length === 1 && el.firstChild.nodeType === Node.TEXT_NODE) el.firstChild.data = term;
+      else el.textContent = term;
+    }
+  }
+
+  function pickTerm(data, term) {
+    const serie = currentSerie();
+    if (!data.hash || !serie) return;
+    (picked[serie] ||= {})[data.hash] = term;
+    GM_setValue('pickedTerms', picked);
+    applyLocalTerms();
+    markChecked({ ...data, current: term });
+  }
 
   // ---------- term colors ----------
   // Unchecked terms get WTR-LAB's term color; terms already ranked by the AI go back to plain text.
@@ -352,6 +361,7 @@ ${refs}`;
     for (const novel of Object.values(checked)) {
       for (const h of Object.keys(novel)) if (globalFroms.has(h)) hashes.add(h);
     }
+    for (const h of Object.keys(globalPicks())) hashes.add(h); // global picks need no check in new novels
     const done = [...hashes].flatMap((h) => {
       const attr = `[data-hash="${cssString(h)}"]`;
       return [`.chapter-body .text-patch:not(#wtrrank)${attr}`, `.chapter-body span:not(.text-patch):has(> .text-patch${attr})`];
@@ -409,6 +419,7 @@ ${refs}`;
     const serie = currentSerie();
     return [...new Set(Object.entries(checked).filter(([n]) => n !== serie).map(([, novel]) => novel[hash]).filter((r) => knownRendering(hash, r)))];
   }
+  applyLocalTerms();
   renderTermColors();
 
   // ---------- UI ----------
@@ -430,7 +441,6 @@ ${refs}`;
     .wtrrank-bar { height: 4px; background: #3a3d42; border-radius: 2px; margin: 6px 0 4px; overflow: hidden; }
     .wtrrank-bar > div { height: 100%; background: #4a7bd0; }
     .wtrrank-reason { color: #aab; font-size: 12.5px; }
-    .wtrrank-copied { color: #6c6; font-size: 12px; }
     .wtrrank-muted { color: #999; font-size: 12.5px; }
     .wtrrank-err { color: #f77; white-space: pre-wrap; word-break: break-word; }
     .wtrrank-field { display: block; margin: 10px 0 4px; font-size: 12.5px; color: #bbb; }
@@ -481,28 +491,26 @@ ${refs}`;
   // Rows for the result panel; items without a score (prior renderings) get no % or bar.
   function renderRows(body, list, data) {
     body.replaceChildren(h('div', { class: 'wtrrank-muted', style: 'margin-bottom:8px' },
-      data.addBtn ? 'Tap a term to put it in the term editor.' : 'Tap a term to copy it.'));
+      'Tap a term to use it in this novel.'));
     list.forEach((x, i) => {
       const scored = typeof x.score === 'number';
-      const note = h('span', { class: 'wtrrank-copied' });
       const row = h('div', { class: 'wtrrank-row', tabindex: '0', role: 'button' },
         h('div', { class: 'wtrrank-top' },
           h('span', { class: 'wtrrank-muted' }, `#${i + 1}`),
           h('span', { class: 'wtrrank-term' }, x.term),
           x.isNew && h('span', { class: 'wtrrank-tag', title: 'Proposed by the AI' }, 'NEW'),
           sameTerm(x.term, data.current) && h('span', { class: 'wtrrank-tag current', title: 'Currently selected in the text' }, 'CURRENT'),
-          note,
           scored && h('span', { class: 'wtrrank-score' }, `${x.score}%`)),
         scored && h('div', { class: 'wtrrank-bar' }, h('div', { style: `width:${x.score}%` })),
         h('div', { class: 'wtrrank-reason' }, x.reason));
-      // Copy, close the list, then open the site's term editor via the tooltip's "+ Term"/"Edit" button.
-      const copy = () => {
-        GM_setClipboard(x.term, 'text');
-        if (data.addBtn?.isConnected) { document.querySelector('.wtrrank-overlay')?.remove(); data.addBtn.click(); pasteIntoEditor(x.term); return; }
-        note.textContent = 'Copied'; setTimeout(() => (note.textContent = ''), 1200);
+      // Use it in the text right away, then close the list and the term's tooltip.
+      const pick = () => {
+        pickTerm(data, x.term);
+        document.querySelector('.wtrrank-overlay')?.remove();
+        closeTooltip(data);
       };
-      row.addEventListener('click', copy);
-      row.addEventListener('keydown', (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), copy()));
+      row.addEventListener('click', pick);
+      row.addEventListener('keydown', (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), pick()));
       body.append(row);
     });
   }
@@ -588,14 +596,15 @@ ${refs}`;
         }, 'Save')),
       h('div', { class: 'wtrrank-actions', style: 'justify-content:flex-start;border-top:1px solid #3a3d42;padding-top:12px' },
         h('button', { class: 'wtrrank-action danger', onclick: resetData }, 'Reset saved data')),
-      h('div', { class: 'wtrrank-muted' }, 'Deletes every checked term in all novels. Keeps the API key and model.'));
+      h('div', { class: 'wtrrank-muted' }, 'Deletes every checked and picked term in all novels. Keeps the API key and model.'));
     if (cfg.key) load();
   }
 
   function resetData() {
-    if (!confirm('Delete all checked terms in every novel? The API key and model are kept. This cannot be undone.')) return;
+    if (!confirm('Delete all checked and picked terms in every novel? The API key and model are kept. This cannot be undone.')) return;
     for (const k of GM_listValues()) if (!['apiKey', 'model'].includes(k)) GM_deleteValue(k);
     for (const k of Object.keys(checked)) delete checked[k];
+    for (const k of Object.keys(picked)) delete picked[k]; // the page keeps showing picks until reload
     renderTermColors();
     document.querySelector('.wtrrank-overlay')?.remove();
   }
@@ -609,6 +618,8 @@ ${refs}`;
   console.assert(detectProvider('AIzaXYZ').id === 'gemini', 'wtrrank: gemini');
   console.assert(normalize([{ score: 1 }, { score: 1 }, { score: 1 }]).reduce((a, x) => a + x.score, 0) === 100, 'wtrrank: sum 100');
   console.assert(normalize([{ score: 0 }, { score: 0 }]).every((x) => x.score === 0), 'wtrrank: zeros');
+  const store = Object.fromEntries([1, 2, 3, 4, 5, 6].map((n) => [n, { 源: n <= 5 ? 'A' : 'B', 二: n <= 4 ? 'C' : 'D' }]));
+  console.assert(globalPicks(store).源 === 'A' && !('二' in globalPicks(store)), 'wtrrank: global after 5 novels');
   console.assert(parseRanking('```json\n{"ranking":[{"term":"A","score":60,"reason":"r"}]}\n```')[0].score === 60, 'wtrrank: parse');
   const dup = parseRanking('{"ranking":[{"term":"A","score":30,"new":true,"reason":"x"},{"term":"A","score":40,"reason":"y"},{"term":"a","score":30,"new":false}]}', ['A']);
   console.assert(dup.length === 2 && dup[0].score === 70 && dup[0].reason === 'y' && !dup[0].isNew && dup[1].isNew, 'wtrrank: merge duplicates, local NEW');
