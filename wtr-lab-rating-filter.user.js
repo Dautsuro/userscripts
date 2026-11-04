@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         WTR-LAB Rating Filter
 // @namespace    wtr-lab-rating-filter
-// @version      2.0.0
-// @description  Folds away novels whose reviews show they are clearly bad (under 2 stars) on the novel list and novel finder.
+// @version      2.1.0
+// @description  Folds away novels with under 5 reviews or whose reviews show they are clearly bad (under 2 stars) on the novel list and novel finder.
 // @match        https://wtr-lab.com/*
 // @grant        none
 // @run-at       document-idle
@@ -11,19 +11,19 @@
 (function () {
   'use strict';
 
-  // Bad only when even rating + K/√reviews (room for luck) stays under 2★.
+  // Fold novels with too few reviews to trust, and those where even rating + K/√reviews (room for luck) stays under 2★.
   const MIN_REVIEWS = 5;
   const BAD = 2.0;
   const K = 2;
-  const isBad = (rating, reviews) =>
-    typeof rating === 'number' && reviews >= MIN_REVIEWS && rating + K / Math.sqrt(reviews) < BAD;
+  const shouldFold = (rating, reviews) =>
+    typeof rating === 'number' && (reviews < MIN_REVIEWS || rating + K / Math.sqrt(reviews) < BAD);
 
   // self-check
-  console.assert(isBad(1.15, 13), 'rating filter: 1.15/13 bad');
-  console.assert(isBad(1.6, 40), 'rating filter: 1.6/40 bad');
-  console.assert(!isBad(2.0, 8) && !isBad(1.3, 6), 'rating filter: too few reviews');
-  console.assert(!isBad(2.51, 53) && isBad(1.99, 1e6), 'rating filter: 2.51/53 kept, 1.99 with huge count bad');
-  console.assert(!isBad(1, 4) && !isBad(null, 50), 'rating filter: <5 reviews or no rating kept');
+  console.assert(shouldFold(1.15, 13) && shouldFold(1.6, 40), 'rating filter: clearly bad folded');
+  console.assert(!shouldFold(2.0, 8) && !shouldFold(1.3, 6), 'rating filter: 5+ reviews, not clearly bad, kept');
+  console.assert(!shouldFold(2.51, 53) && shouldFold(1.99, 1e6), 'rating filter: 2.51/53 kept, 1.99 with huge count folded');
+  console.assert(shouldFold(1, 4) && shouldFold(4.8, 3) && shouldFold(0, 0), 'rating filter: under 5 reviews folded');
+  console.assert(!shouldFold(null, 0), 'rating filter: unreadable card kept');
 
   const PAGES = /^\/[a-z]{2}(-[a-z]+)?\/novel-(list|finder)\/?$/i;
 
@@ -65,7 +65,7 @@
     for (const card of list.querySelectorAll(':scope > [data-slot="card"]')) {
       const { rating, reviews } = cardData(card);
       let line = card.querySelector(':scope > .wrf-line');
-      if (!isBad(rating, reviews)) {
+      if (!shouldFold(rating, reviews)) {
         if (line) line.remove();
         if (card.dataset.wrf) delete card.dataset.wrf;
         continue;

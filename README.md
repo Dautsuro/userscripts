@@ -31,9 +31,10 @@ A simpler version of the script above.
 
 File: `wtr-lab-rating-filter.user.js` · runs on `https://wtr-lab.com/*` (acts on `/novel-list` and `/novel-finder`)
 
-Folds away novels whose reviews show they are clearly bad, so you don't waste time trying them.
+Folds away novels that are unproven or clearly bad, so you don't waste time trying them.
 
-- A novel is folded when `rating + 2 / sqrt(reviews) < 2` and it has at least 5 reviews: even with room for luck, it stays under 2 stars. About 1 in 23 novels with 5+ reviews gets folded.
+- Novels with fewer than 5 reviews are folded.
+- A novel with 5+ reviews is folded when `rating + 2 / sqrt(reviews) < 2`: even with room for luck, it stays under 2 stars. About 1 in 23 novels with 5+ reviews gets folded.
 - Mediocre novels (2.5 stars and up) are never touched; whether they're worth it depends on the content.
 - A folded novel shows as one line, `▸ Title — 1.2★ (13)`. Tap it to open the card, tap again to fold it.
 - Uses the exact rating from the page data, not the rounded number on the card.
