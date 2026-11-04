@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         WTR-LAB Rating Filter
 // @namespace    wtr-lab-rating-filter
-// @version      2.1.0
-// @description  Folds away novels with under 5 reviews or whose reviews show they are clearly bad (under 2 stars) on the novel list and novel finder.
+// @version      2.2.0
+// @description  Folds away novels whose rating is too low for their review count (3 stars at 10 reviews, sliding to 2.5) on the novel list and novel finder.
 // @match        https://wtr-lab.com/*
 // @grant        none
 // @run-at       document-idle
@@ -11,18 +11,23 @@
 (function () {
   'use strict';
 
-  // Fold novels with too few reviews to trust, and those where even rating + K/√reviews (room for luck) stays under 2★.
+  // Minimum rating slides with review count: 3.0 at 10 reviews (the 1–5 scale's middle), higher with fewer reviews,
+  // down toward the 2.5 floor with many. Under 5 reviews: always folded.
   const MIN_REVIEWS = 5;
-  const BAD = 2.0;
-  const K = 2;
+  const FLOOR = 2.5;
+  const K = 0.5 * Math.sqrt(10); // makes the line pass through 10 reviews → 3.0
+  const minRating = (reviews) => FLOOR + K / Math.sqrt(reviews);
   const shouldFold = (rating, reviews) =>
-    typeof rating === 'number' && (reviews < MIN_REVIEWS || rating + K / Math.sqrt(reviews) < BAD);
+    typeof rating === 'number' && (reviews < MIN_REVIEWS || rating < minRating(reviews));
 
   // self-check
-  console.assert(shouldFold(1.15, 13) && shouldFold(1.6, 40), 'rating filter: clearly bad folded');
-  console.assert(!shouldFold(2.0, 8) && !shouldFold(1.3, 6), 'rating filter: 5+ reviews, not clearly bad, kept');
-  console.assert(!shouldFold(2.51, 53) && shouldFold(1.99, 1e6), 'rating filter: 2.51/53 kept, 1.99 with huge count folded');
-  console.assert(shouldFold(1, 4) && shouldFold(4.8, 3) && shouldFold(0, 0), 'rating filter: under 5 reviews folded');
+  console.assert(Math.abs(minRating(10) - 3) < 1e-9, 'rating filter: 10 reviews → 3.0');
+  console.assert(shouldFold(2.99, 10) && !shouldFold(3.0, 10), 'rating filter: 10-review anchor');
+  console.assert(shouldFold(3.2, 5) && !shouldFold(3.22, 5), 'rating filter: 5 reviews need 3.21');
+  console.assert(shouldFold(2.71, 50) && !shouldFold(2.73, 50), 'rating filter: 50 reviews need 2.72');
+  console.assert(shouldFold(2.49, 1e6) && !shouldFold(2.51, 1e6), 'rating filter: 2.5 floor');
+  console.assert(shouldFold(1.8, 6) && shouldFold(2.51, 53), 'rating filter: user examples');
+  console.assert(shouldFold(4.8, 3) && shouldFold(0, 0), 'rating filter: under 5 reviews folded');
   console.assert(!shouldFold(null, 0), 'rating filter: unreadable card kept');
 
   const PAGES = /^\/[a-z]{2}(-[a-z]+)?\/novel-(list|finder)\/?$/i;
