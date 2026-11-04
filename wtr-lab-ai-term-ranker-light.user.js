@@ -11,6 +11,7 @@
 // @grant        GM_deleteValue
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
+// @grant        GM_addValueChangeListener
 // @connect      api.anthropic.com
 // @connect      api.openai.com
 // @connect      openrouter.ai
@@ -346,8 +347,24 @@ ${refs}`;
   // KvSync is undefined when the @require could not load (server down at install): the script runs unsynced.
   const SYNC_APP = 'wtr-lab-light';
   const syncUrl = GM_getValue('syncUrl', ''), syncToken = GM_getValue('syncToken', '');
+  // KvSync re-reads and re-saves its whole state through GM on every set(); inside kvBatched() that
+  // state is held in memory and written once, so bulk loops (bootstrap, reset) stay linear.
+  const KV_STATE = `kvsync:${SYNC_APP}`;
+  let kvBatch = null;
+  const kvStorage = {
+    get: (k, d) => (kvBatch && k === KV_STATE ? kvBatch.state : GM_getValue(k, d)),
+    set: (k, v) => { if (kvBatch && k === KV_STATE) kvBatch.state = v; else GM_setValue(k, v); },
+  };
+  function kvBatched(fn) {
+    kvBatch = { state: GM_getValue(KV_STATE, null) };
+    try { fn(); } finally {
+      const { state } = kvBatch;
+      kvBatch = null;
+      if (state) GM_setValue(KV_STATE, state);
+    }
+  }
   const kv = syncUrl && syncToken && typeof KvSync !== 'undefined'
-    ? KvSync.create({ app: SYNC_APP, url: syncUrl, token: syncToken }) : null;
+    ? KvSync.create({ app: SYNC_APP, url: syncUrl, token: syncToken, storage: kvStorage }) : null;
   // JSON array keys keep any hash text unambiguous. Hashes are raw source text: a key over KvSync's
   // 2000-char limit would throw, so such an entry stays local only (null key).
   const kvKey = (...parts) => { const k = JSON.stringify(parts); return k.length <= 2000 ? k : null; };
@@ -518,18 +535,30 @@ ${refs}`;
     applyLocalTerms();
     renderTermColors();
   }
+  // Rows can be edited by hand in the admin UI: anything with the wrong shape is ignored, since a bad
+  // status saved here would make globalPicks() throw on every load and the script could never recover.
   function applyRemote(key, value, deleted) {
     let parts;
     try { parts = JSON.parse(key); } catch (_) { return; }
     if (!Array.isArray(parts)) return;
     const [kind, a, b] = parts;
-    if (kind === 'model') { if (!deleted && value) GM_setValue('model', value); return; }
+    if (kind === 'model') { if (!deleted && typeof value === 'string' && value) GM_setValue('model', value); return; }
+    if (typeof a !== 'string') return;
     if (kind === 'status') {
-      if (deleted) delete termStatus[a]; else termStatus[a] = value;
+      if (deleted) { if (!(a in termStatus)) return; delete termStatus[a]; }
+      else if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+      else if (JSON.stringify(termStatus[a]) === JSON.stringify(value)) return;
+      else termStatus[a] = value;
     } else if (kind === 'picked' || kind === 'checked') {
+      if (typeof b !== 'string') return;
       const map = kind === 'picked' ? picked : checked;
-      if (!deleted) (map[a] ||= {})[b] = value; // a picked null ("not in this novel") is a real value
-      else if (map[a]) { delete map[a][b]; if (!Object.keys(map[a]).length) delete map[a]; }
+      if (deleted) {
+        if (!map[a] || !(b in map[a])) return;
+        delete map[a][b];
+        if (!Object.keys(map[a]).length) delete map[a];
+      } else if (!(typeof value === 'string' || (kind === 'picked' && value === null))) return; // a picked null = "not in this novel"
+      else if (map[a]?.[b] === value) return;
+      else (map[a] ||= {})[b] = value;
     } else return;
     remoteDirty.add(kind);
     if (!remoteTimer) remoteTimer = setTimeout(flushRemote, 100);
@@ -537,15 +566,30 @@ ${refs}`;
   if (kv) {
     kv.onChange(applyRemote);
     addEventListener('pagehide', flushRemote); // don't lose a pulled batch whose save was still pending
-    // First run with sync: offer every existing entry at clientUpdated 1, so any real edit on any device
-    // wins over this old data, and two devices' old data merge instead of overwriting each other.
-    if (!GM_getValue('syncBootstrapped', false)) {
-      for (const [serie, novel] of Object.entries(picked)) for (const [hash, t] of Object.entries(novel)) kvPut(['picked', serie, hash], t, 1);
-      for (const [serie, novel] of Object.entries(checked)) for (const [hash, r] of Object.entries(novel)) kvPut(['checked', serie, hash], r, 1);
-      for (const [hash, s] of Object.entries(termStatus)) kvPut(['status', hash], s, 1);
-      if (GM_getValue('model', '')) kvPut(['model'], GM_getValue('model', ''), 1);
-      GM_setValue('syncBootstrapped', true);
+    // onChange fires only in the tab that pulled; other tabs must take its saved maps, or their next
+    // local edit would write their stale copy over the pulled entries.
+    for (const [name, map] of [['pickedTerms', picked], ['checkedTerms', checked], ['termStatus', termStatus]]) {
+      GM_addValueChangeListener(name, (_, __, value, remote) => {
+        if (!remote) return;
+        for (const k of Object.keys(map)) delete map[k];
+        Object.assign(map, value || {});
+        applyLocalTerms();
+        renderTermColors();
+      });
     }
+    kvBatched(() => {
+      // First run with sync: offer every existing entry at clientUpdated 1, so any real edit on any device
+      // wins over this old data, and two devices' old data merge instead of overwriting each other.
+      if (!GM_getValue('syncBootstrapped', false)) {
+        for (const [serie, novel] of Object.entries(picked)) for (const [hash, t] of Object.entries(novel)) kvPut(['picked', serie, hash], t, 1);
+        for (const [serie, novel] of Object.entries(checked)) for (const [hash, r] of Object.entries(novel)) kvPut(['checked', serie, hash], r, 1);
+        for (const [hash, s] of Object.entries(termStatus)) kvPut(['status', hash], s, 1);
+        if (GM_getValue('model', '')) kvPut(['model'], GM_getValue('model', ''), 1);
+        GM_setValue('syncBootstrapped', true);
+      }
+      // Heal maps that lost synced entries (e.g. overwritten by a stale tab before 1.4.0's listener).
+      for (const [k, v] of kv.entries('')) if (k !== '["model"]') applyRemote(k, v, false);
+    });
     kv.start();
   }
 
@@ -790,8 +834,8 @@ ${refs}`;
   function resetData() {
     if (!confirm('Delete all checked and picked terms in every novel (and on synced devices)? The API key, model and sync settings are kept. This cannot be undone.')) return;
     // Tombstones reach the other devices too. Their pending queue lives in the KvSync state key, so keep it.
-    if (kv) for (const [k] of kv.entries('')) if (k !== '["model"]') kv.remove(k);
-    const keep = ['apiKey', 'model', 'syncUrl', 'syncToken', `kvsync:${SYNC_APP}`];
+    if (kv) kvBatched(() => { for (const [k] of kv.entries('')) if (k !== '["model"]') kv.remove(k); });
+    const keep = ['apiKey', 'model', 'syncUrl', 'syncToken', KV_STATE];
     for (const k of GM_listValues()) if (!keep.includes(k)) GM_deleteValue(k);
     for (const k of Object.keys(checked)) delete checked[k];
     for (const k of Object.keys(picked)) delete picked[k]; // the page keeps showing picks until reload
