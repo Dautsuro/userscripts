@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.3.1
+// @version      1.4.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -18,6 +18,8 @@
 // @connect      api.groq.com
 // @connect      api.x.ai
 // @connect      api.deepseek.com
+// @connect      *
+// @require      http://100.125.40.99:8090/kvsync.js
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -337,6 +339,26 @@ ${refs}`;
   // dynamic (depends on context: never global, always checked).
   const picked = GM_getValue('pickedTerms', {});
   const termStatus = GM_getValue('termStatus', {});
+
+  // ---------- sync ----------
+  // Optional: with a sync server URL and token set (device-local, never synced), every changed entry is
+  // also written to KvSync, which pushes it to the personal server and pulls other devices' edits.
+  // KvSync is undefined when the @require could not load (server down at install): the script runs unsynced.
+  const SYNC_APP = 'wtr-lab-light';
+  const syncUrl = GM_getValue('syncUrl', ''), syncToken = GM_getValue('syncToken', '');
+  const kv = syncUrl && syncToken && typeof KvSync !== 'undefined'
+    ? KvSync.create({ app: SYNC_APP, url: syncUrl, token: syncToken }) : null;
+  // JSON array keys keep any hash text unambiguous. Hashes are raw source text: a key over KvSync's
+  // 2000-char limit would throw, so such an entry stays local only (null key).
+  const kvKey = (...parts) => { const k = JSON.stringify(parts); return k.length <= 2000 ? k : null; };
+  function kvPut(parts, value, clientUpdated) {
+    const k = kv && kvKey(...parts);
+    if (k) kv.set(k, value, clientUpdated);
+  }
+  function kvDel(parts) {
+    const k = kv && kvKey(...parts);
+    if (k) kv.remove(k);
+  }
   function decideStatus(terms) {
     const counts = {};
     for (const t of terms) counts[t] = (counts[t] || 0) + 1;
@@ -348,7 +370,7 @@ ${refs}`;
   function updateStatus(hash) {
     if (termStatus[hash]) return;
     const status = decideStatus(Object.values(picked).map((novel) => novel[hash]).filter(Boolean));
-    if (status) { termStatus[hash] = status; GM_setValue('termStatus', termStatus); }
+    if (status) { termStatus[hash] = status; GM_setValue('termStatus', termStatus); kvPut(['status', hash], status); }
   }
   const globalPicks = () => Object.fromEntries(Object.entries(termStatus).filter(([, s]) => s.global).map(([h, s]) => [h, s.global]));
 
@@ -378,6 +400,7 @@ ${refs}`;
     const mine = (picked[serie] ||= {});
     if (term === undefined) delete mine[data.hash]; else mine[data.hash] = term;
     GM_setValue('pickedTerms', picked);
+    if (term === undefined) kvDel(['picked', serie, data.hash]); else kvPut(['picked', serie, data.hash], term);
     updateStatus(data.hash);
     applyLocalTerms();
     if (term) markChecked({ ...data, current: term });
@@ -435,24 +458,26 @@ ${refs}`;
   function markChecked(data) {
     const serie = currentSerie();
     if (!data.hash || !serie) return;
-    (checked[serie] ||= {})[data.hash] = data.current || data.hash;
+    const rendering = (checked[serie] ||= {})[data.hash] = data.current || data.hash;
     GM_setValue('checkedTerms', checked);
+    kvPut(['checked', serie, data.hash], rendering);
     renderTermColors();
   }
 
   // Keep each checked term's rendering equal to what the page shows now (first span per hash).
   function syncRenderings() {
-    const mine = checked[currentSerie()];
+    const serie = currentSerie(), mine = checked[serie];
     if (!mine) return;
-    const seen = new Set();
-    let changed = false;
+    const seen = new Set(), changed = [];
     for (const el of document.querySelectorAll('.chapter-body .text-patch[data-hash]')) {
       const hash = el.dataset.hash, text = el.textContent.trim();
       if (seen.has(hash) || !(hash in mine) || !text) continue;
       seen.add(hash);
-      if (mine[hash] !== text) { mine[hash] = text; changed = true; }
+      if (mine[hash] !== text) { mine[hash] = text; changed.push(hash); }
     }
-    if (changed) GM_setValue('checkedTerms', checked);
+    if (!changed.length) return;
+    GM_setValue('checkedTerms', checked);
+    for (const hash of changed) kvPut(['checked', serie, hash], mine[hash]);
   }
 
   // Checked terms from every novel whose source shares a character with `source` (keeps the prompt small).
@@ -477,6 +502,52 @@ ${refs}`;
   for (const novel of Object.values(picked)) Object.keys(novel).forEach(updateStatus); // picks saved before statuses existed
   applyLocalTerms();
   renderTermColors();
+
+  // Server changes go straight into the maps. Statuses are taken as they come (the server already resolved
+  // conflicts), never re-derived from remote picks. Saving and re-rendering are batched: a first sync can
+  // bring thousands of rows, and each GM_setValue writes a whole map.
+  const remoteDirty = new Set();
+  let remoteTimer = null;
+  function flushRemote() {
+    clearTimeout(remoteTimer); remoteTimer = null;
+    if (!remoteDirty.size) return;
+    if (remoteDirty.has('picked')) GM_setValue('pickedTerms', picked);
+    if (remoteDirty.has('checked')) GM_setValue('checkedTerms', checked);
+    if (remoteDirty.has('status')) GM_setValue('termStatus', termStatus);
+    remoteDirty.clear();
+    applyLocalTerms();
+    renderTermColors();
+  }
+  function applyRemote(key, value, deleted) {
+    let parts;
+    try { parts = JSON.parse(key); } catch (_) { return; }
+    if (!Array.isArray(parts)) return;
+    const [kind, a, b] = parts;
+    if (kind === 'model') { if (!deleted && value) GM_setValue('model', value); return; }
+    if (kind === 'status') {
+      if (deleted) delete termStatus[a]; else termStatus[a] = value;
+    } else if (kind === 'picked' || kind === 'checked') {
+      const map = kind === 'picked' ? picked : checked;
+      if (!deleted) (map[a] ||= {})[b] = value; // a picked null ("not in this novel") is a real value
+      else if (map[a]) { delete map[a][b]; if (!Object.keys(map[a]).length) delete map[a]; }
+    } else return;
+    remoteDirty.add(kind);
+    if (!remoteTimer) remoteTimer = setTimeout(flushRemote, 100);
+  }
+  if (kv) {
+    kv.onChange(applyRemote);
+    addEventListener('pagehide', flushRemote); // don't lose a pulled batch whose save was still pending
+    // First run with sync: offer every existing entry at clientUpdated 1, so any real edit on any device
+    // wins over this old data, and two devices' old data merge instead of overwriting each other.
+    if (!GM_getValue('syncBootstrapped', false)) {
+      for (const [serie, novel] of Object.entries(picked)) for (const [hash, t] of Object.entries(novel)) kvPut(['picked', serie, hash], t, 1);
+      for (const [serie, novel] of Object.entries(checked)) for (const [hash, r] of Object.entries(novel)) kvPut(['checked', serie, hash], r, 1);
+      for (const [hash, s] of Object.entries(termStatus)) kvPut(['status', hash], s, 1);
+      if (GM_getValue('model', '')) kvPut(['model'], GM_getValue('model', ''), 1);
+      GM_setValue('syncBootstrapped', true);
+    }
+    kv.start();
+  }
 
   // ---------- UI ----------
   GM_addStyle(`
@@ -659,6 +730,10 @@ ${refs}`;
     const select = h('select', { class: 'wtrrank-input' });
     const manual = h('input', { class: 'wtrrank-input', placeholder: 'Model name (used if not empty)' });
     manual.value = cfg.model;
+    const syncUrlIn = h('input', { class: 'wtrrank-input', autocomplete: 'off', placeholder: 'http://100.x.y.z:8090 (empty = no sync)' });
+    syncUrlIn.value = GM_getValue('syncUrl', '');
+    const syncTokenIn = h('input', { class: 'wtrrank-input', type: 'password', autocomplete: 'off', placeholder: 'This device\'s token' });
+    syncTokenIn.value = GM_getValue('syncToken', '');
 
     async function load() {
       const p = detectProvider(keyIn.value);
@@ -686,6 +761,9 @@ ${refs}`;
       h('label', { class: 'wtrrank-field' }, 'API key'), keyIn, status,
       h('label', { class: 'wtrrank-field' }, 'Model'), select,
       h('label', { class: 'wtrrank-field' }, 'Or type a model name'), manual,
+      h('label', { class: 'wtrrank-field' }, 'Sync server URL'), syncUrlIn,
+      h('label', { class: 'wtrrank-field' }, 'Sync token'), syncTokenIn,
+      h('div', { class: 'wtrrank-muted' }, 'Sync settings stay on this device and apply after a page reload.'),
       h('div', { class: 'wtrrank-actions' },
         h('button', { class: 'wtrrank-action secondary', onclick: load }, 'Reload models'),
         h('button', {
@@ -695,20 +773,26 @@ ${refs}`;
             if (!detectProvider(keyIn.value)) return (status.textContent = 'Unrecognized key format.');
             if (!model) return (status.textContent = 'Choose or type a model.');
             GM_setValue('apiKey', keyIn.value.trim());
+            if (model !== cfg.model) kvPut(['model'], model);
             GM_setValue('model', model);
+            GM_setValue('syncUrl', syncUrlIn.value.trim());
+            GM_setValue('syncToken', syncTokenIn.value.trim());
             document.querySelector('.wtrrank-overlay')?.remove();
             if (after) after();
           },
         }, 'Save')),
       h('div', { class: 'wtrrank-actions', style: 'justify-content:flex-start;border-top:1px solid #3a3d42;padding-top:12px' },
         h('button', { class: 'wtrrank-action danger', onclick: resetData }, 'Reset saved data')),
-      h('div', { class: 'wtrrank-muted' }, 'Deletes every checked and picked term in all novels. Keeps the API key and model.'));
+      h('div', { class: 'wtrrank-muted' }, 'Deletes every checked and picked term in all novels, on every synced device too. Keeps the API key, model and sync settings.'));
     if (cfg.key) load();
   }
 
   function resetData() {
-    if (!confirm('Delete all checked and picked terms in every novel? The API key and model are kept. This cannot be undone.')) return;
-    for (const k of GM_listValues()) if (!['apiKey', 'model'].includes(k)) GM_deleteValue(k);
+    if (!confirm('Delete all checked and picked terms in every novel (and on synced devices)? The API key, model and sync settings are kept. This cannot be undone.')) return;
+    // Tombstones reach the other devices too. Their pending queue lives in the KvSync state key, so keep it.
+    if (kv) for (const [k] of kv.entries('')) if (k !== '["model"]') kv.remove(k);
+    const keep = ['apiKey', 'model', 'syncUrl', 'syncToken', `kvsync:${SYNC_APP}`];
+    for (const k of GM_listValues()) if (!keep.includes(k)) GM_deleteValue(k);
     for (const k of Object.keys(checked)) delete checked[k];
     for (const k of Object.keys(picked)) delete picked[k]; // the page keeps showing picks until reload
     for (const k of Object.keys(termStatus)) delete termStatus[k];
@@ -733,5 +817,6 @@ ${refs}`;
   console.assert(loose.length === 2 && loose[0].reason === 'uses {x}' && loose[1].score === 40, 'wtrrank: missing comma tolerated');
   console.assert(parseRanking('```json\n{"ranking":[{"term":"A","score":60,"reason":"r"}]}\n```')[0].score === 60, 'wtrrank: parse');
   const dup = parseRanking('{"ranking":[{"term":"A","score":30,"new":true,"reason":"x"},{"term":"A","score":40,"reason":"y"},{"term":"a","score":30,"new":false}]}', ['A']);
+  console.assert(kvKey('model') === '["model"]' && kvKey('status', 'x'.repeat(2000)) === null, 'wtrrank: sync keys, too long stays local');
   console.assert(dup.length === 2 && dup[0].score === 70 && dup[0].reason === 'y' && !dup[0].isNew && dup[1].isNew, 'wtrrank: merge duplicates, local NEW');
 })();
