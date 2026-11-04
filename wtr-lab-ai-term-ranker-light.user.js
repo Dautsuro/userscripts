@@ -812,7 +812,7 @@ ${refs}`;
       h('label', { class: 'wtrrank-field' }, 'Sync server URL'), syncUrlIn,
       h('label', { class: 'wtrrank-field' }, 'Sync token'), syncTokenIn,
       h('div', { class: 'wtrrank-muted' }, 'Sync settings stay on this device and apply after a page reload.'),
-      kv?.status && h('div', { class: 'wtrrank-muted' }, syncStatusText(kv.status())),
+      kv?.status ? h('div', { class: 'wtrrank-muted' }, syncStatusText(kv.status())) : '', // native append() would print "undefined"
       h('div', { class: 'wtrrank-actions' },
         h('button', { class: 'wtrrank-action secondary', onclick: load }, 'Reload models'),
         h('button', {
