@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.4.0
+// @version      1.4.1
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -19,7 +19,7 @@
 // @connect      api.groq.com
 // @connect      api.x.ai
 // @connect      api.deepseek.com
-// @connect      *
+// @connect      100.125.40.99
 // @require      http://100.125.40.99:8090/kvsync.js
 // @run-at       document-idle
 // ==/UserScript==
@@ -591,6 +591,10 @@ ${refs}`;
       for (const [k, v] of kv.entries('')) if (k !== '["model"]') applyRemote(k, v, false);
     });
     kv.start();
+    // A new server (URL changed in settings) has none of our data: offer everything again.
+    if (GM_getValue('syncResync', false)) { GM_deleteValue('syncResync'); kv.resync?.(); }
+    // After a server restore, re-push edits newer than the backup (see the server README).
+    GM_registerMenuCommand('AI Term Ranker Light: resync with server', () => kv.resync?.());
   }
 
   // ---------- UI ----------
@@ -808,6 +812,7 @@ ${refs}`;
       h('label', { class: 'wtrrank-field' }, 'Sync server URL'), syncUrlIn,
       h('label', { class: 'wtrrank-field' }, 'Sync token'), syncTokenIn,
       h('div', { class: 'wtrrank-muted' }, 'Sync settings stay on this device and apply after a page reload.'),
+      kv?.status && h('div', { class: 'wtrrank-muted' }, syncStatusText(kv.status())),
       h('div', { class: 'wtrrank-actions' },
         h('button', { class: 'wtrrank-action secondary', onclick: load }, 'Reload models'),
         h('button', {
@@ -819,6 +824,7 @@ ${refs}`;
             GM_setValue('apiKey', keyIn.value.trim());
             if (model !== cfg.model) kvPut(['model'], model);
             GM_setValue('model', model);
+            if (syncUrlIn.value.trim() !== GM_getValue('syncUrl', '')) GM_setValue('syncResync', true);
             GM_setValue('syncUrl', syncUrlIn.value.trim());
             GM_setValue('syncToken', syncTokenIn.value.trim());
             document.querySelector('.wtrrank-overlay')?.remove();
@@ -831,11 +837,14 @@ ${refs}`;
     if (cfg.key) load();
   }
 
+  const syncStatusText = ({ lastOkAt, lastError }) =>
+    `Last sync: ${lastOkAt ? new Date(lastOkAt).toLocaleString() : 'not yet'}${lastError ? ` · error: ${lastError}` : ''}`;
+
   function resetData() {
     if (!confirm('Delete all checked and picked terms in every novel (and on synced devices)? The API key, model and sync settings are kept. This cannot be undone.')) return;
     // Tombstones reach the other devices too. Their pending queue lives in the KvSync state key, so keep it.
     if (kv) kvBatched(() => { for (const [k] of kv.entries('')) if (k !== '["model"]') kv.remove(k); });
-    const keep = ['apiKey', 'model', 'syncUrl', 'syncToken', KV_STATE];
+    const keep = ['apiKey', 'model', 'syncUrl', 'syncToken', 'syncResync', KV_STATE];
     for (const k of GM_listValues()) if (!keep.includes(k)) GM_deleteValue(k);
     for (const k of Object.keys(checked)) delete checked[k];
     for (const k of Object.keys(picked)) delete picked[k]; // the page keeps showing picks until reload
@@ -861,6 +870,7 @@ ${refs}`;
   console.assert(loose.length === 2 && loose[0].reason === 'uses {x}' && loose[1].score === 40, 'wtrrank: missing comma tolerated');
   console.assert(parseRanking('```json\n{"ranking":[{"term":"A","score":60,"reason":"r"}]}\n```')[0].score === 60, 'wtrrank: parse');
   const dup = parseRanking('{"ranking":[{"term":"A","score":30,"new":true,"reason":"x"},{"term":"A","score":40,"reason":"y"},{"term":"a","score":30,"new":false}]}', ['A']);
+  console.assert(syncStatusText({ lastOkAt: null, lastError: 'push 401' }) === 'Last sync: not yet · error: push 401', 'wtrrank: sync status text');
   console.assert(kvKey('model') === '["model"]' && kvKey('status', 'x'.repeat(2000)) === null, 'wtrrank: sync keys, too long stays local');
   console.assert(dup.length === 2 && dup[0].score === 70 && dup[0].reason === 'y' && !dup[0].isNew && dup[1].isNew, 'wtrrank: merge duplicates, local NEW');
 })();
