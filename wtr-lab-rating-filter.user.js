@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         WTR-LAB Rating Filter
 // @namespace    wtr-lab-rating-filter
-// @version      1.1.0
-// @description  Grays out novels whose rating is too low for their review count on the novel list and novel finder.
+// @version      2.0.0
+// @description  Folds away novels whose reviews show they are clearly bad (under 2 stars) on the novel list and novel finder.
 // @match        https://wtr-lab.com/*
 // @grant        none
 // @run-at       document-idle
@@ -11,23 +11,21 @@
 (function () {
   'use strict';
 
-  // Minimum rating for a review count. Lower confidence bound shape: rating - K/sqrt(reviews) >= TARGET.
-  // Fitted to the anchors 20 -> 3.2, 50 -> 3.4, 100 -> 3.5; it levels off near 3.7 for very popular novels.
-  const MIN_REVIEWS = 20;
-  const TARGET = 3.744;
-  const K = 2.433;
-  const minRating = (reviews) => (reviews < MIN_REVIEWS ? Infinity : TARGET - K / Math.sqrt(reviews));
-  const passes = (rating, reviews) => typeof rating === 'number' && rating >= minRating(reviews);
+  // Bad only when even rating + K/√reviews (room for luck) stays under 2★.
+  const MIN_REVIEWS = 5;
+  const BAD = 2.0;
+  const K = 2;
+  const isBad = (rating, reviews) =>
+    typeof rating === 'number' && reviews >= MIN_REVIEWS && rating + K / Math.sqrt(reviews) < BAD;
 
   // self-check
-  console.assert(passes(3.2, 20) && !passes(3.19, 20) && !passes(5, 19), 'rating filter: 20 anchor');
-  console.assert(passes(3.4, 50) && !passes(3.39, 50), 'rating filter: 50 anchor');
-  console.assert(passes(3.5, 100) && !passes(3.49, 100), 'rating filter: 100 anchor');
+  console.assert(isBad(1.15, 13), 'rating filter: 1.15/13 bad');
+  console.assert(isBad(1.6, 40), 'rating filter: 1.6/40 bad');
+  console.assert(!isBad(2.0, 8) && !isBad(1.3, 6), 'rating filter: too few reviews');
+  console.assert(!isBad(2.51, 53) && isBad(1.99, 1e6), 'rating filter: 2.51/53 kept, 1.99 with huge count bad');
+  console.assert(!isBad(1, 4) && !isBad(null, 50), 'rating filter: <5 reviews or no rating kept');
 
   const PAGES = /^\/[a-z]{2}(-[a-z]+)?\/novel-(list|finder)\/?$/i;
-  const STORE = 'wtrRatingFilterOn';
-  let enabled = true;
-  try { enabled = localStorage.getItem(STORE) !== '0'; } catch (e) { /* storage blocked: default on */ }
 
   // Exact values from the card's React props; the card text only shows the rating rounded to 1 decimal.
   function cardData(card) {
@@ -49,45 +47,50 @@
     return { rating: parseFloat(m[1]), reviews: parseFloat(m[2]) * ({ K: 1e3, M: 1e6 }[m[3]] || 1) };
   }
 
-  let bar;
-  function ensureBar(list) {
-    if (bar && bar.isConnected && bar.nextElementSibling === list) return bar;
-    if (bar) bar.remove();
-    bar = document.createElement('div');
-    bar.style.cssText = 'display:flex;align-items:center;gap:8px;margin:0 0 8px;font-size:13px;opacity:.85';
-    bar.innerHTML = '<span></span><button type="button" style="margin-left:auto;padding:2px 10px;border:1px solid currentColor;border-radius:6px;background:none;color:inherit;cursor:pointer"></button>';
-    bar.querySelector('button').addEventListener('click', () => {
-      enabled = !enabled;
-      try { localStorage.setItem(STORE, enabled ? '1' : '0'); } catch (e) { /* ignore */ }
-      apply();
-    });
-    list.before(bar);
-    return bar;
-  }
+  // Folding hides the card's own children with CSS, so React's nodes are never moved or removed.
+  const style = document.createElement('style');
+  style.textContent = `
+    [data-slot="card"][data-wrf="folded"] > :not(.wrf-line) { display: none !important; }
+    .wrf-line { display: block; width: 100%; min-height: 36px; padding: 6px 10px; border: 0; background: none;
+      color: inherit; font: inherit; font-size: 13px; text-align: left; opacity: .75; cursor: pointer;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }`;
+  document.head.appendChild(style);
+
+  const opened = new Set(); // novel hrefs the user unfolded; per novel, since React reuses card elements across pages
 
   function apply() {
     if (!PAGES.test(location.pathname)) return;
     const list = document.querySelector('.series-list');
     if (!list) return;
-    const cards = list.querySelectorAll(':scope > [data-slot="card"]');
-    let hidden = 0;
-    for (const card of cards) {
+    for (const card of list.querySelectorAll(':scope > [data-slot="card"]')) {
       const { rating, reviews } = cardData(card);
-      const hide = enabled && !passes(rating, reviews);
-      if (hide) hidden++;
-      const filter = hide ? 'grayscale(1)' : '';
-      if (card.style.filter !== filter) {
-        card.style.filter = filter;
-        card.style.opacity = hide ? '0.4' : '';
+      let line = card.querySelector(':scope > .wrf-line');
+      if (!isBad(rating, reviews)) {
+        if (line) line.remove();
+        if (card.dataset.wrf) delete card.dataset.wrf;
+        continue;
       }
+      const link = card.querySelector('a[href*="/novel/"]');
+      const key = link ? link.getAttribute('href') : '';
+      const open = opened.has(key);
+      if (!line) {
+        line = document.createElement('button');
+        line.type = 'button';
+        line.className = 'wrf-line';
+        line.addEventListener('click', () => {
+          const k = line.dataset.key;
+          if (opened.has(k)) opened.delete(k); else opened.add(k);
+          apply();
+        });
+        card.prepend(line);
+      }
+      const title = (card.querySelector('h3') || {}).textContent || '';
+      const text = `${open ? '▾' : '▸'} ${title.trim()} — ${rating.toFixed(1)}★ (${reviews})`;
+      if (line.textContent !== text) line.textContent = text;
+      if (line.dataset.key !== key) line.dataset.key = key;
+      const state = open ? 'open' : 'folded';
+      if (card.dataset.wrf !== state) card.dataset.wrf = state;
     }
-    const b = ensureBar(list);
-    const text = enabled
-      ? `Rating filter: grayed ${hidden} of ${cards.length} (min ${MIN_REVIEWS} reviews, 3.2 → 3.7 stars)`
-      : `Rating filter off (${cards.length} shown)`;
-    const btn = enabled ? 'Show all' : 'Filter';
-    if (b.firstChild.textContent !== text) b.firstChild.textContent = text;
-    if (b.lastChild.textContent !== btn) b.lastChild.textContent = btn;
   }
 
   // Next.js swaps cards on page/filter changes without a reload.
