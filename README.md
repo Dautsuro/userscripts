@@ -36,7 +36,7 @@ Hides novels whose rating is too low for their number of reviews.
 - Novels with fewer than 20 reviews are hidden.
 - Minimum rating: `3.744 - 2.433 / sqrt(reviews)`. That gives 3.2 at 20 reviews, 3.4 at 50, 3.5 at 100, and levels off near 3.7 for very popular novels.
 - Uses the exact rating from the page data, not the rounded number on the card.
-- A bar above the list shows how many novels were hidden, with a **Show all** / **Filter** toggle (remembered per device).
+- A bar above the list shows how many novels were grayed out, with a **Show all** / **Filter** toggle (remembered per device).
 
 ## Install
 

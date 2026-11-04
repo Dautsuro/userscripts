@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         WTR-LAB Rating Filter
 // @namespace    wtr-lab-rating-filter
-// @version      1.0.0
-// @description  Hides novels whose rating is too low for their review count on the novel list and novel finder.
+// @version      1.1.0
+// @description  Grays out novels whose rating is too low for their review count on the novel list and novel finder.
 // @match        https://wtr-lab.com/*
 // @grant        none
 // @run-at       document-idle
@@ -75,12 +75,15 @@
       const { rating, reviews } = cardData(card);
       const hide = enabled && !passes(rating, reviews);
       if (hide) hidden++;
-      const display = hide ? 'none' : '';
-      if (card.style.display !== display) card.style.display = display;
+      const filter = hide ? 'grayscale(1)' : '';
+      if (card.style.filter !== filter) {
+        card.style.filter = filter;
+        card.style.opacity = hide ? '0.4' : '';
+      }
     }
     const b = ensureBar(list);
     const text = enabled
-      ? `Rating filter: hid ${hidden} of ${cards.length} (min ${MIN_REVIEWS} reviews, 3.2 → 3.7 stars)`
+      ? `Rating filter: grayed ${hidden} of ${cards.length} (min ${MIN_REVIEWS} reviews, 3.2 → 3.7 stars)`
       : `Rating filter off (${cards.length} shown)`;
     const btn = enabled ? 'Show all' : 'Filter';
     if (b.firstChild.textContent !== text) b.firstChild.textContent = text;
