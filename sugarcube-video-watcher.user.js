@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SugarCube Video Watcher
 // @namespace    sugarcube-video-watcher
-// @version      1.1.2
+// @version      1.1.3
 // @description  Local games: unwatched videos get a flashy cover, sound and controls, and play fullscreen; watched ones loop muted like GIFs. Watched list syncs through the personal server.
 // @match        file:///*
 // @grant        GM_xmlhttpRequest
@@ -229,8 +229,9 @@
 
   // ---------- stall fix ----------
   // With hardware decoding on, Firefox's GPU decoder can sit on a very short clip (~13 frames) without
-  // ever showing a frame: playing, fully loaded, time stuck. A reload fixes it (a seek doesn't).
-  const STALL_MS = 750, MAX_RELOADS = 2;
+  // ever showing a frame: playing, fully loaded, time stuck. A reload fixes it (a seek doesn't), but not
+  // always at once, and reloads in quick succession failed: retry with growing gaps (0.75 s, 1.5 s, 2.25 s…).
+  const STALL_MS = 750, MAX_RELOADS = 6;
   const stalls = new WeakMap(); // video -> { t, f, since, tries }
   const stallInfo = (v, s, f) => `${relPath(srcOf(v))} (${st.get(v)?.mode}, t ${s.t.toFixed(2)}→${v.currentTime.toFixed(2)}, frames ${s.f}→${f})`;
   setInterval(() => {
@@ -247,8 +248,9 @@
         stalls.set(v, { t: v.currentTime, f, since: now, tries: 0 });
         continue;
       }
-      if (s.tries >= MAX_RELOADS || now - s.since < STALL_MS * (s.tries + 1)) continue;
-      s.tries++;
+      if (s.tries > MAX_RELOADS || now - s.since < STALL_MS * (s.tries + 1)) continue;
+      s.since = now;
+      if (++s.tries > MAX_RELOADS) { console.info('[svw] stall, gave up:', stallInfo(v, s, f)); continue; }
       console.info(`[svw] stall, reload ${s.tries}:`, stallInfo(v, s, f));
       v.load();
       v.currentTime = s.t;
