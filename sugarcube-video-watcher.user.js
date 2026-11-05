@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SugarCube Video Watcher
 // @namespace    sugarcube-video-watcher
-// @version      1.1.1
+// @version      1.1.2
 // @description  Local games: unwatched videos get a flashy cover, sound and controls, and play fullscreen; watched ones loop muted like GIFs. Watched list syncs through the personal server.
 // @match        file:///*
 // @grant        GM_xmlhttpRequest
@@ -229,7 +229,8 @@
 
   // ---------- stall fix ----------
   // With hardware decoding on, Firefox's GPU decoder can sit on a very short clip (~13 frames) without
-  // ever showing a frame: playing, fully loaded, time stuck. Kick it: a seek, then a reload.
+  // ever showing a frame: playing, fully loaded, time stuck. A reload fixes it (a seek doesn't).
+  const STALL_MS = 750, MAX_RELOADS = 2;
   const stalls = new WeakMap(); // video -> { t, f, since, tries }
   const stallInfo = (v, s, f) => `${relPath(srcOf(v))} (${st.get(v)?.mode}, t ${s.t.toFixed(2)}→${v.currentTime.toFixed(2)}, frames ${s.f}→${f})`;
   setInterval(() => {
@@ -239,20 +240,21 @@
       if (v.seeking || !loaded) continue; // still loading, or our own kick in progress
       const s = stalls.get(v), now = Date.now(), f = v.getVideoPlaybackQuality().totalVideoFrames;
       if (s && f < s.f) s.f = f; // reloaded: the frame counter restarted
-      // Real progress only: a seek can nudge the time or show one frame while the decoder stays stuck.
+      // Real progress only: a stuck decoder can nudge the time or show one frame.
       // Frames also cover a loop wrapping the time back to 0.
       if (!s || v.currentTime >= s.t + 0.2 || f >= s.f + 3) {
-        if (s?.tries) console.info(`[svw] stall fixed by ${s.tries === 1 ? 'seek' : 'reload'}:`, stallInfo(v, s, f));
+        if (s?.tries) console.info(`[svw] stall fixed by reload ${s.tries}:`, stallInfo(v, s, f));
         stalls.set(v, { t: v.currentTime, f, since: now, tries: 0 });
         continue;
       }
-      if (s.tries >= 2 || now - s.since < 1500 * (s.tries + 1)) continue;
+      if (s.tries >= MAX_RELOADS || now - s.since < STALL_MS * (s.tries + 1)) continue;
       s.tries++;
-      console.info(`[svw] stall, trying ${s.tries === 1 ? 'seek' : 'reload'}:`, stallInfo(v, s, f));
-      if (s.tries === 1) v.currentTime = s.t;
-      else { v.load(); v.currentTime = s.t; v.play().catch(() => {}); }
+      console.info(`[svw] stall, reload ${s.tries}:`, stallInfo(v, s, f));
+      v.load();
+      v.currentTime = s.t;
+      v.play().catch(() => {});
     }
-  }, 500);
+  }, 250);
 
   // ---------- settings ----------
   const syncStatusText = ({ lastOkAt, lastError }) =>

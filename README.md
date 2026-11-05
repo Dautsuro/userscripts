@@ -51,7 +51,7 @@ Remembers which videos you have watched in local HTML games (made for SugarCube,
 - A video counts as watched when it plays to the end. From then on it loops muted with no controls, like a GIF.
 - Watched videos are remembered per game (Twine IFID; for other engines the folder name after `Games/`, else the page title without version numbers) and by path inside the game folder, so a new game version in another folder keeps them.
 - The game's own autoplay, mute, loop, volume and `play()` calls are overridden.
-- A clip that plays but never moves (Firefox GPU decoder stuck on very short clips) is kicked: a seek after 1.5 s, a reload after 3 s. The console shows `[svw]` lines saying which worked.
+- A clip that plays but never moves (Firefox GPU decoder stuck on very short clips) is reloaded after 0.75 s without progress (up to twice). The console shows `[svw]` lines.
 - Optional sync of the watched list between devices through the personal PocketBase server (see `CLAUDE.md`). Settings: Violentmonkey menu, **Video Watcher settings**.
 
 ## Install
