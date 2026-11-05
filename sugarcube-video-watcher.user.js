@@ -62,7 +62,12 @@
     GM_setValue('watched', watched);
     kvPut(k);
   }
-  const refreshAll = () => document.querySelectorAll('video').forEach(update);
+  const positions = GM_getValue('positions', {}); // { key: seconds } where an unwatched video was left
+  function savePosition(k, t) {
+    if (t > 0) positions[k] = t; else delete positions[k];
+    GM_setValue('positions', positions);
+  }
+  const refreshAll =() => document.querySelectorAll('video').forEach(update);
 
   // Another tab saved the map: take it, or our next save would drop its entries.
   GM_addValueChangeListener('watched', (_, __, value, remote) => {
@@ -152,6 +157,7 @@
       e.stopPropagation(); // the game may have a link or handler around the video
       s.mode = 'open';
       update(v);
+      if (positions[s.key]) v.currentTime = positions[s.key];
       goFullscreen(v, s); // inside the click: fullscreen needs a user gesture
       v.play().catch(() => {});
     });
@@ -166,21 +172,21 @@
   on('playing', enforce);
   on('pause', enforce);
   on('volumechange', enforce);
-  on('timeupdate', (v, s) => { if (s.mode === 'open' && v.duration && v.currentTime >= 0.9 * v.duration) markWatched(s.key); });
+  // Resume point, device-local. Saved while playing: SugarCube removes the video on passage change,
+  // and a detached video's pause event never reaches our listener.
+  on('timeupdate', (v, s) => {
+    if (s.mode === 'open' && Math.abs(v.currentTime - (positions[s.key] || 0)) >= 1) savePosition(s.key, v.currentTime);
+  });
   on('ended', (v, s) => {
     if (s.mode !== 'open') return;
     markWatched(s.key);
+    savePosition(s.key, 0);
     s.mode = 'gif';
     if (document.fullscreenElement === v) document.exitFullscreen().catch(() => {});
     update(v);
   });
-  // Without controls (fullscreen, playing), a click or Space toggles pause; paused brings controls back.
-  on('click', (v, s, e) => {
-    if (s.mode !== 'open' || v.controls) return;
-    e.preventDefault();
-    e.stopPropagation();
-    v.paused ? v.play().catch(() => {}) : v.pause();
-  });
+  // Fullscreen and playing has no controls: Space toggles pause, and paused brings controls back.
+  // No click toggle on purpose: misclicks.
   document.addEventListener('keydown', (e) => {
     const v = document.fullscreenElement;
     if (e.key !== ' ' || v?.localName !== 'video' || st.get(v)?.mode !== 'open') return;
