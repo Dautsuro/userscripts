@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SugarCube Video Watcher
 // @namespace    sugarcube-video-watcher
-// @version      1.1.3
+// @version      1.1.4
 // @description  Local games: unwatched videos get a flashy cover, sound and controls, and play fullscreen; watched ones loop muted like GIFs. Watched list syncs through the personal server.
 // @match        file:///*
 // @grant        GM_xmlhttpRequest
@@ -241,9 +241,9 @@
       if (v.seeking || !loaded) continue; // still loading, or our own kick in progress
       const s = stalls.get(v), now = Date.now(), f = v.getVideoPlaybackQuality().totalVideoFrames;
       if (s && f < s.f) s.f = f; // reloaded: the frame counter restarted
-      // Real progress only: a stuck decoder can nudge the time or show one frame.
-      // Frames also cover a loop wrapping the time back to 0.
-      if (!s || v.currentTime >= s.t + 0.2 || f >= s.f + 3) {
+      // A stuck decoder nudges the time by ~0.02 s at most; slow clips (7 fps) still move 0.1 s or
+      // 2 frames in time, and a loop jumps the time back.
+      if (!s || Math.abs(v.currentTime - s.t) >= 0.1 || f >= s.f + 2) {
         if (s?.tries) console.info(`[svw] stall fixed by reload ${s.tries}:`, stallInfo(v, s, f));
         stalls.set(v, { t: v.currentTime, f, since: now, tries: 0 });
         continue;
@@ -253,7 +253,8 @@
       if (++s.tries > MAX_RELOADS) { console.info('[svw] stall, gave up:', stallInfo(v, s, f)); continue; }
       console.info(`[svw] stall, reload ${s.tries}:`, stallInfo(v, s, f));
       v.load();
-      v.currentTime = s.t;
+      // Seeking a freshly reloaded clip into its first second kept it frozen; restart those from 0.
+      if (s.t >= 1) v.currentTime = s.t; else s.t = 0;
       v.play().catch(() => {});
     }
   }, 250);
