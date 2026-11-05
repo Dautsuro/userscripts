@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SugarCube Video Watcher
 // @namespace    sugarcube-video-watcher
-// @version      1.0.0
+// @version      1.1.0
 // @description  Local games: unwatched videos get a flashy cover, sound and controls, and play fullscreen; watched ones loop muted like GIFs. Watched list syncs through the personal server.
 // @match        file:///*
 // @grant        GM_xmlhttpRequest
@@ -226,6 +226,29 @@
     }
   }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['autoplay', 'loop', 'muted', 'controls'] });
   refreshAll();
+
+  // ---------- stall fix ----------
+  // With hardware decoding on, Firefox's GPU decoder can sit on a very short clip (~13 frames) without
+  // ever showing a frame: playing, fully loaded, time stuck. Kick it: a seek, then a reload.
+  const stalls = new WeakMap(); // video -> { t, since, tries }
+  setInterval(() => {
+    for (const v of document.querySelectorAll('video')) {
+      if (v.paused || v.ended) { stalls.delete(v); continue; }
+      const loaded = v.buffered.length && v.buffered.end(v.buffered.length - 1) > v.currentTime;
+      if (v.seeking || !loaded) continue; // still loading, or our own kick in progress
+      const s = stalls.get(v), now = Date.now();
+      if (!s || s.t !== v.currentTime) {
+        if (s?.tries) console.info(`[svw] stall fixed by ${s.tries === 1 ? 'seek' : 'reload'}:`, relPath(srcOf(v)));
+        stalls.set(v, { t: v.currentTime, since: now, tries: 0 });
+        continue;
+      }
+      if (s.tries >= 2 || now - s.since < 1500 * (s.tries + 1)) continue;
+      s.tries++;
+      console.info(`[svw] stall, trying ${s.tries === 1 ? 'seek' : 'reload'}:`, relPath(srcOf(v)));
+      if (s.tries === 1) v.currentTime = s.t;
+      else { v.load(); v.currentTime = s.t; v.play().catch(() => {}); }
+    }
+  }, 500);
 
   // ---------- settings ----------
   const syncStatusText = ({ lastOkAt, lastError }) =>
