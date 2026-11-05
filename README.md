@@ -49,7 +49,7 @@ Remembers which videos you have watched in local HTML games (made for SugarCube,
 - Unwatched videos play with sound and controls, no autoplay or loop. Playing goes fullscreen with the cursor and controls hidden. Space pauses (controls come back), Esc leaves fullscreen, pauses and puts the cover back.
 - An unwatched video resumes where you left it (saved on this device only).
 - A video counts as watched when it plays to the end. From then on it loops muted with no controls, like a GIF.
-- Watched videos are remembered per game (Twine IFID, or for other engines the page title without version numbers) and by path inside the game folder, so a new game version in another folder keeps them.
+- Watched videos are remembered per game (Twine IFID; for other engines the folder name after `Games/`, else the page title without version numbers) and by path inside the game folder, so a new game version in another folder keeps them.
 - The game's own autoplay, mute, loop, volume and `play()` calls are overridden.
 - Optional sync of the watched list between devices through the personal PocketBase server (see `CLAUDE.md`). Settings: Violentmonkey menu, **Video Watcher settings**.
 
