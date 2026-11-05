@@ -39,6 +39,18 @@ Folds away novels whose rating is too low for their number of reviews, so you do
 - A folded novel shows as one line, `▸ Title — 1.2★ (13)`. Tap it to open the card, tap again to fold it.
 - Uses the exact rating from the page data, not the rounded number on the card.
 
+## SugarCube Video Watcher
+
+File: `sugarcube-video-watcher.user.js` · runs on local files (`file:///*`)
+
+Remembers which videos you have watched in local HTML games (made for SugarCube, works on any local page).
+
+- Unwatched videos are hidden behind a flashing **▶ VIDEO** cover, so you can spot them while scrolling. Tap it to play.
+- Unwatched videos play with sound and controls, no autoplay or loop. Playing goes fullscreen with the cursor and controls hidden. Click or Space pauses (controls come back), Esc / back leaves fullscreen and pauses.
+- A video counts as watched at 90%. From then on it loops muted with no controls, like a GIF.
+- The game's own autoplay, mute, loop, volume and `play()` calls are overridden.
+- Optional sync of the watched list between devices through the personal PocketBase server (see `CLAUDE.md`). Settings: Violentmonkey menu, **Video Watcher settings**.
+
 ## Install
 
 Open the `.user.js` file in Firefox with Violentmonkey installed, or add it from its raw URL. For the Light script with sync, Tailscale must be on during install or update, because Violentmonkey downloads `kvsync.js` from the server then.
