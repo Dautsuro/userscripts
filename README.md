@@ -39,17 +39,6 @@ Folds away novels whose rating is too low for their number of reviews, so you do
 - A folded novel shows as one line, `▸ Title — 1.2★ (13)`. Tap it to open the card, tap again to fold it.
 - Uses the exact rating from the page data, not the rounded number on the card.
 
-## F95zone Rating Filter
-
-File: `f95zone-rating-filter.user.js` · runs on `https://f95zone.to/sam/latest_alpha/*` (Latest Updates)
-
-Grays out games whose rating is too low for their number of votes.
-
-- Games with fewer than 20 votes are grayed out.
-- Minimum rating: `3.95 - 2.9 / sqrt(votes)`. That gives 3.3 at 20 votes, 3.54 at 50, 3.66 at 100, and levels off near 3.95. It is stricter than the WTR-LAB curve because F95 ratings run higher on popular games.
-- The list does not show vote counts, so the script reads them from each game's thread page (2 at a time, and it stops reading each page once it finds the count). Counts are cached on the device for 3 days. While counts load, the bar says how many are still loading.
-- A bar above the list shows how many games were grayed out, with a **Show all** / **Filter** toggle (remembered per device).
-
 ## Install
 
 Open the `.user.js` file in Firefox with Violentmonkey installed, or add it from its raw URL. For the Light script with sync, Tailscale must be on during install or update, because Violentmonkey downloads `kvsync.js` from the server then.
