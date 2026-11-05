@@ -44,7 +44,10 @@
   const kvPut = (k, clientUpdated) => { if (kv && k.length <= 2000) kv.set(k, true, clientUpdated); };
 
   let gid = '';
-  const gameId = () => (gid ||= document.querySelector('tw-storydata')?.getAttribute('ifid') || document.title);
+  // Twine games (SugarCube, Harlowe…) keep their IFID across versions. Other engines: the page title
+  // without version numbers ("My Game v1.95" -> "My Game").
+  const titleId = (t) => t.replace(/[\s(\[-]*\bv?\d+(\.\d+)+[a-z]?\b[)\]]?/gi, '').trim();
+  const gameId = () => (gid ||= document.querySelector('tw-storydata')?.getAttribute('ifid') || titleId(document.title));
   function relPath(src, page = location.href) {
     const clean = (u) => { u = u.split(/[?#]/)[0]; try { return decodeURIComponent(u); } catch { return u; } };
     const s = clean(src), dir = clean(page).replace(/[^/]*$/, '');
@@ -205,7 +208,7 @@
     const s = st.get(left);
     if (s?.mode === 'open') {
       if (watched[s.key]) s.mode = 'gif';
-      else left.pause(); // don't keep playing inline with sound
+      else { s.mode = 'covered'; left.pause(); savePosition(s.key, left.currentTime); } // back behind the cover, resumable
     }
     if (s) update(left);
   });
@@ -255,5 +258,6 @@
   // ---------- self-check ----------
   console.assert(relPath('file:///C:/G/a%20b/v/x.mp4?t=1', 'file:///C:/G/a%20b/index.html') === 'v/x.mp4', 'svw: relative path');
   console.assert(relPath('file:///D:/other/x.mp4', 'file:///C:/G/index.html') === 'file:///D:/other/x.mp4','svw: outside path kept');
+  console.assert(['My Game v1.95', 'My Game 0.12.3b', 'My Game (v2.0)', 'My Game - 1.0'].every((t) => titleId(t) === 'My Game') && titleId('Day 1') === 'Day 1', 'svw: title without version');
   console.assert(validKey('["watched","g","v/x.mp4"]') && !validKey('["watched","g"]') && !validKey('nope'), 'svw: key validation');
 })();
