@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         F95zone Rating Filter
 // @namespace    f95zone-rating-filter
-// @version      1.1.1
+// @version      1.1.2
 // @description  On Latest Updates, grays out games under 3.5 stars or with fewer than 20 reviews.
 // @match        https://f95zone.to/sam/latest_alpha/*
 // @grant        none
@@ -30,6 +30,13 @@
     .f95rf-ok::after { content: "✓ " attr(data-f95rf-count); position: absolute; top: 6px; left: 6px; z-index: 5;
       padding: 2px 7px; border-radius: 10px; background: #2ecc40; color: #000; font: bold 12px sans-serif; pointer-events: none; }`;
   document.head.appendChild(style);
+
+  // The site's script expands a tile on hover; keep the hover events of grayed tiles from reaching it.
+  for (const type of ['mouseover', 'mouseenter', 'mousemove']) {
+    window.addEventListener(type, e => {
+      if (e.target.closest?.('.f95rf-dim')) e.stopImmediatePropagation();
+    }, true);
+  }
 
   // Exact rating from the star bar width (text is rounded to 1 decimal); null if unrated.
   function tileRating(tile) {
