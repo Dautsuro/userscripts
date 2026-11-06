@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         WTR-LAB Rating Filter
 // @namespace    wtr-lab-rating-filter
-// @version      3.0.0
-// @description  Grays out novels rated under 3.5 stars or with fewer than 20 reviews on the novel list and novel finder.
+// @version      3.1.0
+// @description  Grays out novels rated under 3.5 stars or with fewer than 20 reviews on the novel list and novel finder, and outlines the rest in green.
 // @match        https://wtr-lab.com/*
 // @grant        none
 // @run-at       document-idle
@@ -44,7 +44,9 @@
   }
 
   const style = document.createElement('style');
-  style.textContent = '[data-slot="card"].wrf-dim { opacity: .3; filter: grayscale(1); }';
+  // Same green as the F95zone Rating Filter's accepted tiles.
+  style.textContent = `[data-slot="card"].wrf-dim { opacity: .3; filter: grayscale(1); }
+    [data-slot="card"].wrf-ok { outline: 3px solid #2ecc40; outline-offset: -3px; }`;
   document.head.appendChild(style);
 
   function apply() {
@@ -53,8 +55,10 @@
     if (!list) return;
     // Toggle every time: React reuses card elements across pages.
     for (const card of list.querySelectorAll(':scope > [data-slot="card"]')) {
-      const dim = shouldDim(cardData(card));
+      const d = cardData(card);
+      const dim = shouldDim(d), ok = !!d && !dim;
       if (card.classList.contains('wrf-dim') !== dim) card.classList.toggle('wrf-dim', dim);
+      if (card.classList.contains('wrf-ok') !== ok) card.classList.toggle('wrf-ok', ok);
     }
   }
 
