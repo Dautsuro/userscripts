@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         F95zone Rating Filter
 // @namespace    f95zone-rating-filter
-// @version      1.2.2
+// @version      1.3.0
 // @description  On Latest Updates, grays out games under 3.5 stars or with fewer than 20 reviews.
 // @match        https://f95zone.to/sam/latest_alpha/*
 // @grant        none
@@ -64,11 +64,11 @@
     }, true);
   }
 
-  // Exact rating from the star bar width (text is rounded to 1 decimal); null if unrated.
+  // Rating rounded to 1 decimal, as the tile shows it (star bar width is in %, 20% per star); null if unrated.
   function tileRating(tile) {
     const bar = tile.querySelector('.resource-tile_rating span');
     const w = bar && parseFloat(bar.style.width);
-    if (w > 0) return w / 20;
+    if (w > 0) return Math.round(w / 2) / 10;
     const t = parseFloat(tile.querySelector('.resource-tile_info-meta_rating')?.textContent);
     return t > 0 ? t : null;
   }
