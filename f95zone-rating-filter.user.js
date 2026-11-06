@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         F95zone Rating Filter
 // @namespace    f95zone-rating-filter
-// @version      1.1.2
+// @version      1.2.0
 // @description  On Latest Updates, grays out games under 3.5 stars or with fewer than 20 reviews.
 // @match        https://f95zone.to/sam/latest_alpha/*
 // @grant        none
@@ -28,8 +28,25 @@
     .f95rf-dim { opacity: .3; filter: grayscale(1); }
     .f95rf-ok { outline: 3px solid #2ecc40; outline-offset: -3px; }
     .f95rf-ok::after { content: "✓ " attr(data-f95rf-count); position: absolute; top: 6px; left: 6px; z-index: 5;
-      padding: 2px 7px; border-radius: 10px; background: #2ecc40; color: #000; font: bold 12px sans-serif; pointer-events: none; }`;
+      padding: 2px 7px; border-radius: 10px; background: #2ecc40; color: #000; font: bold 12px sans-serif; pointer-events: none; }
+    #f95rf-loading { position: fixed; right: 16px; bottom: 16px; z-index: 9999; display: flex; align-items: center; gap: 8px;
+      padding: 8px 14px; border-radius: 20px; background: rgba(0,0,0,.85); color: #fff; font: 13px sans-serif; pointer-events: none; }
+    #f95rf-loading[hidden] { display: none; }
+    #f95rf-loading::before { content: ""; width: 14px; height: 14px; border: 2px solid #555; border-top-color: #2ecc40;
+      border-radius: 50%; animation: f95rf-spin .8s linear infinite; }
+    @keyframes f95rf-spin { to { transform: rotate(360deg); } }`;
   document.head.appendChild(style);
+
+  const loading = document.createElement('div');
+  loading.id = 'f95rf-loading';
+  loading.hidden = true;
+  loading.setAttribute('role', 'status');
+  document.body.appendChild(loading);
+  // left = games not finished yet, including the one being fetched.
+  const showLoading = left => {
+    loading.hidden = !left;
+    loading.textContent = `Checking reviews… ${left} left`;
+  };
 
   // The site's script expands a tile on hover; keep the hover events of grayed tiles from reaching it.
   for (const type of ['mouseover', 'mouseenter', 'mousemove']) {
@@ -80,6 +97,7 @@
     if (running) return;
     running = true;
     while (queue.length) {
+      showLoading(queue.length);
       const { id, tiles } = queue.shift();
       if (!(id in cache)) {
         try { cache[id] = [await fetchReviews(id), Date.now()]; saveCache(); }
@@ -88,6 +106,7 @@
       tiles.forEach(t => mark(t, cache[id][0]));
       await new Promise(r => setTimeout(r, 250));
     }
+    showLoading(0);
     running = false;
   }
 
@@ -101,6 +120,7 @@
     if (id in cache) { mark(tile, cache[id][0]); return; }
     queue.push({ id, tiles: [tile] });
     pump();
+    showLoading(queue.length + 1); // +1: the one pump() is fetching
   }
 
   const scan = () => document.querySelectorAll('.resource-tile[data-thread-id]').forEach(check);
