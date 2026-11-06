@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         F95zone Rating Filter
 // @namespace    f95zone-rating-filter
-// @version      1.2.0
+// @version      1.2.1
 // @description  On Latest Updates, grays out games under 3.5 stars or with fewer than 20 reviews.
 // @match        https://f95zone.to/sam/latest_alpha/*
 // @grant        none
@@ -26,7 +26,9 @@
   const style = document.createElement('style');
   style.textContent = `
     .f95rf-dim { opacity: .3; filter: grayscale(1); }
-    .f95rf-ok { outline: 3px solid #2ecc40; outline-offset: -3px; }
+    /* A ring layer, not an outline: the tile's body (z-index 15) paints over outlines. */
+    .f95rf-ok::before { content: ""; position: absolute; inset: 0; z-index: 20; border: 3px solid #2ecc40;
+      border-radius: inherit; pointer-events: none; }
     .f95rf-ok::after { content: "✓ " attr(data-f95rf-count); position: absolute; top: 6px; left: 6px; z-index: 5;
       padding: 2px 7px; border-radius: 10px; background: #2ecc40; color: #000; font: bold 12px sans-serif; pointer-events: none; }
     #f95rf-loading { position: fixed; right: 16px; bottom: 16px; z-index: 9999; display: flex; align-items: center; gap: 8px;
