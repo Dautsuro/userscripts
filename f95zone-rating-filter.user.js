@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         F95zone Rating Filter
 // @namespace    f95zone-rating-filter
-// @version      1.0.0
+// @version      1.1.0
 // @description  On Latest Updates, grays out games under 3.5 stars or with fewer than 20 reviews.
 // @match        https://f95zone.to/sam/latest_alpha/*
 // @grant        none
@@ -26,7 +26,10 @@
   const style = document.createElement('style');
   style.textContent = `
     .f95rf-dim { opacity: .3; filter: grayscale(1); transition: opacity .2s, filter .2s; }
-    .f95rf-dim:hover { opacity: 1; filter: none; }`;
+    .f95rf-dim:hover { opacity: 1; filter: none; }
+    .f95rf-ok { outline: 3px solid #2ecc40; outline-offset: -3px; }
+    .f95rf-ok::after { content: "✓ " attr(data-f95rf-count); position: absolute; top: 6px; left: 6px; z-index: 5;
+      padding: 2px 7px; border-radius: 10px; background: #2ecc40; color: #000; font: bold 12px sans-serif; pointer-events: none; }`;
   document.head.appendChild(style);
 
   // Exact rating from the star bar width (text is rounded to 1 decimal); null if unrated.
@@ -36,6 +39,14 @@
     if (w > 0) return w / 20;
     const t = parseFloat(tile.querySelector('.resource-tile_info-meta_rating')?.textContent);
     return t > 0 ? t : null;
+  }
+
+  // Gray if too few reviews, else mark as validated with its review count. Unmarked = still checking.
+  function mark(tile, reviews) {
+    const ok = reviews >= MIN_REVIEWS;
+    tile.classList.toggle('f95rf-dim', !ok);
+    tile.classList.toggle('f95rf-ok', ok);
+    tile.dataset.f95rfCount = reviews;
   }
 
   // Reads the thread page only until the "Reviews (N)" tab (~25% in), then stops the download.
@@ -68,7 +79,7 @@
         try { cache[id] = [await fetchReviews(id), Date.now()]; saveCache(); }
         catch (e) { console.warn('[f95rf] thread', id, e); continue; }
       }
-      tiles.forEach(t => t.classList.toggle('f95rf-dim', cache[id][0] < MIN_REVIEWS));
+      tiles.forEach(t => mark(t, cache[id][0]));
       await new Promise(r => setTimeout(r, 250));
     }
     running = false;
@@ -81,7 +92,7 @@
     if (rating === null || rating < MIN_RATING) { tile.classList.add('f95rf-dim'); return; }
     const id = tile.dataset.threadId;
     if (!id) return;
-    if (id in cache) { tile.classList.toggle('f95rf-dim', cache[id][0] < MIN_REVIEWS); return; }
+    if (id in cache) { mark(tile, cache[id][0]); return; }
     queue.push({ id, tiles: [tile] });
     pump();
   }

@@ -47,6 +47,7 @@ Grays out games rated under 3.5 stars or with fewer than 20 reviews. Hover a gra
 
 - Unrated games and games under 3.5 are grayed at once, using the exact rating from the star bar.
 - For games rated 3.5+, the review count comes from the thread page's **Reviews (N)** tab, read one thread at a time (the download stops once the count is found). Counts are cached for 3 days in the site's local storage.
+- Validated games get a green border and a `✓ N` badge (N = review count). A game with neither gray nor badge is still being checked.
 - Works across pages and filter changes.
 
 ## SugarCube Video Watcher
