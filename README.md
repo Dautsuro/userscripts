@@ -61,6 +61,12 @@ Remembers which videos you have watched in local HTML games (made for SugarCube,
 - A clip that plays but never moves (Firefox GPU decoder stuck on very short clips) is reloaded after 0.75 s without progress, then again at growing gaps (up to 6 times). The console shows `[svw]` lines.
 - Optional sync of the watched list between devices through the personal PocketBase server (see `CLAUDE.md`). Settings: Violentmonkey menu, **Video Watcher settings**.
 
+## YouTube True Theater Mode
+
+File: `youtube-true-theater-mode.user.js` · runs on `https://www.youtube.com/*`
+
+Theater mode (the player button or `T`) fills the whole page like fullscreen, but the browser bar and the Windows taskbar stay. The YouTube header and the scrollbar are hidden while it is on; scroll down for the description and comments. Built for the PC.
+
 ## Install
 
 Open the `.user.js` file in Firefox with Violentmonkey installed, or add it from its raw URL. For the Light script with sync, Tailscale must be on during install or update, because Violentmonkey downloads `kvsync.js` from the server then.
