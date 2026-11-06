@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB Rating Filter
 // @namespace    wtr-lab-rating-filter
-// @version      3.1.0
+// @version      3.2.0
 // @description  Grays out novels rated under 3.5 stars or with fewer than 20 reviews on the novel list and novel finder, and outlines the rest in green.
 // @match        https://wtr-lab.com/*
 // @grant        none
@@ -13,12 +13,12 @@
 
   const MIN_RATING = 3.5;
   const MIN_REVIEWS = 20;
-  // null data = unreadable card: left alone.
-  const shouldDim = (d) => !!d && (d.reviews < MIN_REVIEWS || !(d.rating >= MIN_RATING));
+  // null data = unreadable card: left alone. Rating rounded to 1 decimal, as the card shows it.
+  const shouldDim = (d) => !!d && (d.reviews < MIN_REVIEWS || !(Math.round(d.rating * 10) / 10 >= MIN_RATING));
 
   // self-check
   console.assert(shouldDim({ rating: 4.8, reviews: 19 }) && !shouldDim({ rating: 3.5, reviews: 20 }), 'rating filter: 20 reviews');
-  console.assert(shouldDim({ rating: 3.49, reviews: 500 }), 'rating filter: 3.5 stars');
+  console.assert(!shouldDim({ rating: 3.46, reviews: 500 }) && shouldDim({ rating: 3.44, reviews: 500 }), 'rating filter: 3.5 stars as shown');
   console.assert(shouldDim({ rating: null, reviews: 0 }) && !shouldDim(null), 'rating filter: unrated / unreadable');
 
   const PAGES = /^\/[a-z]{2}(-[a-z]+)?\/novel-(list|finder)\/?$/i;
