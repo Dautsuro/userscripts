@@ -31,13 +31,9 @@ A simpler version of the script above.
 
 File: `wtr-lab-rating-filter.user.js` · runs on `https://wtr-lab.com/*` (acts on `/novel-list` and `/novel-finder`)
 
-Folds away novels whose rating is too low for their number of reviews, so you don't waste time trying them.
+Grays out novels rated under 3.5 stars or with fewer than 20 reviews (unrated novels too), instantly, since the list already has both numbers.
 
-- Novels with fewer than 5 reviews are folded.
-- Minimum rating: `2.5 + 1.58 / sqrt(reviews)`. That gives 3.21 at 5 reviews, 3.0 at 10 (the middle of the 1–5 scale), 2.85 at 20, 2.72 at 50, and slides toward 2.5 for very popular novels. Few reviews must show a higher rating; many reviews get the benefit of the doubt down to 2.5.
-- On a sample of 3,660 novels with 5+ reviews, it folds about half (67% at 5–9 reviews, 28% at 20–49, none at 100+).
-- A folded novel shows as one line, `▸ Title — 1.2★ (13)`. Tap it to open the card, tap again to fold it.
-- Uses the exact rating from the page data, not the rounded number on the card.
+- Uses the exact rating from the page data, not the rounded number on the card (falls back to the card text if the data can't be read).
 
 ## F95zone Rating Filter
 
