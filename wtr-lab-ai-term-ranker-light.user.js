@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.5.0
+// @version      1.5.1
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -767,8 +767,10 @@ ${refs}`;
 
   // Rows for the result panel.
   // A term with 99+ WTR-LAB votes locks only when no other chip has 99+ (a split crowd means context matters).
+  // Chips differing only in case ("Qi"/"qi") count as one, and either spelling locks.
+  const popularTerm = (popular = []) => (new Set(popular.map((t) => t.toLowerCase())).size === 1 ? popular[0].toLowerCase() : null);
   function renderRows(body, list, data, trap) {
-    const popular = data.popular?.length === 1 ? data.popular[0] : null;
+    const popular = popularTerm(data.popular);
     body.replaceChildren(h('div', { class: 'wtrrank-muted', style: 'margin-bottom:8px' },
       'Tap a term to use it in this novel.'),
       trap && h('div', { class: 'wtrrank-trap' },
@@ -781,13 +783,13 @@ ${refs}`;
           x.isNew && h('span', { class: 'wtrrank-tag', title: 'Proposed by the AI' }, 'NEW'),
           sameTerm(x.term, data.current) && h('span', { class: 'wtrrank-tag current', title: 'Currently selected in the text' }, 'CURRENT'),
           data.previous?.includes(x.term) && h('span', { class: 'wtrrank-tag previous', title: 'Picked in another novel' }, 'PREVIOUS'),
-          x.term === popular && h('span', { class: 'wtrrank-tag popular', title: '99+ WTR-LAB votes: picking it makes it global' }, '99+'),
+          x.term.toLowerCase() === popular && h('span', { class: 'wtrrank-tag popular', title: '99+ WTR-LAB votes: picking it makes it global' }, '99+'),
           h('span', { class: 'wtrrank-score' }, `${x.score}%`)),
         h('div', { class: 'wtrrank-bar' }, h('div', { style: `width:${x.score}%` })),
         h('div', { class: 'wtrrank-reason' }, x.reason));
       // Use it in the text right away, then close the list and the term's tooltip.
       const pick = () => {
-        if (trap || x.term === popular) lockGlobal(data.hash, x.term);
+        if (trap || x.term.toLowerCase() === popular) lockGlobal(data.hash, x.term);
         if (x.score >= CONFIDENT_SCORE) setConfident(data.hash, x.term);
         pickTerm(data, x.term);
         document.querySelector('.wtrrank-overlay')?.remove();
@@ -921,6 +923,7 @@ ${refs}`;
   console.assert(parseRanking('```json\n{"ranking":[{"term":"A","score":60,"reason":"r"}]}\n```')[0].score === 60, 'wtrrank: parse');
   const dup = parseRanking('{"ranking":[{"term":"A","score":30,"new":true,"reason":"x"},{"term":"A","score":40,"reason":"y"},{"term":"a","score":30,"new":false}]}', ['A']);
   console.assert(syncStatusText({ lastOkAt: null, lastError: 'push 401' }) === 'Last sync: not yet · error: push 401', 'wtrrank: sync status text');
+  console.assert(popularTerm(['Soul Ring', 'soul ring']) === 'soul ring' && popularTerm(['A', 'B']) === null && popularTerm([]) === null, 'wtrrank: 99+ case-only duplicates merge');
   console.assert(kvKey('model') === '["model"]' && kvKey('status', 'x'.repeat(2000)) === null, 'wtrrank: sync keys, too long stays local');
   console.assert(dup.length === 2 && dup[0].score === 70 && dup[0].reason === 'y' && !dup[0].isNew && dup[1].isNew, 'wtrrank: merge duplicates, local NEW');
 })();
