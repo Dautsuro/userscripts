@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         F95zone Rating Filter
 // @namespace    f95zone-rating-filter
-// @version      1.2.1
+// @version      1.2.2
 // @description  On Latest Updates, grays out games under 3.5 stars or with fewer than 20 reviews.
 // @match        https://f95zone.to/sam/latest_alpha/*
 // @grant        none
@@ -29,6 +29,13 @@
     /* A ring layer, not an outline: the tile's body (z-index 15) paints over outlines. */
     .f95rf-ok::before { content: ""; position: absolute; inset: 0; z-index: 20; border: 3px solid #2ecc40;
       border-radius: inherit; pointer-events: none; }
+    /* Opened on hover, the card is gallery + body + tags panel overflowing the tile: ring each piece instead. */
+    .f95rf-ok.resource-tile-hover::before { display: none; }
+    .f95rf-ok.resource-tile-hover :is(.resource-tile_gallery-wrap, .resource-tile_body, .resource-tile_hover-wrap)::after {
+      content: ""; position: absolute; inset: 0; z-index: 20; border: 3px solid #2ecc40; border-radius: inherit; pointer-events: none; }
+    .f95rf-ok.resource-tile-hover .resource-tile_gallery-wrap::after { border-bottom: 0; }
+    .f95rf-ok.resource-tile-hover .resource-tile_body::after { border-top: 0; border-bottom: 0; }
+    .f95rf-ok.resource-tile-hover .resource-tile_hover-wrap::after { border-top: 0; }
     .f95rf-ok::after { content: "✓ " attr(data-f95rf-count); position: absolute; top: 6px; left: 6px; z-index: 5;
       padding: 2px 7px; border-radius: 10px; background: #2ecc40; color: #000; font: bold 12px sans-serif; pointer-events: none; }
     #f95rf-loading { position: fixed; right: 16px; bottom: 16px; z-index: 9999; display: flex; align-items: center; gap: 8px;
