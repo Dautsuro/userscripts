@@ -43,7 +43,7 @@ Folds away novels whose rating is too low for their number of reviews, so you do
 
 File: `f95zone-rating-filter.user.js` · runs on `https://f95zone.to/sam/latest_alpha/*` (Latest Updates)
 
-Grays out games rated under 3.5 stars or with fewer than 20 reviews. Hover a grayed tile to see it normally.
+Grays out games rated under 3.5 stars or with fewer than 20 reviews.
 
 - Unrated games and games under 3.5 are grayed at once, using the exact rating from the star bar.
 - For games rated 3.5+, the review count comes from the thread page's **Reviews (N)** tab, read one thread at a time (the download stops once the count is found). Counts are cached for 3 days in the site's local storage.
