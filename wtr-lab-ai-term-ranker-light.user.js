@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.4.1
+// @version      1.5.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -192,8 +192,9 @@
   }
 
   const SYSTEM = `You judge English translations of one term from a Chinese web novel and produce a scored tier list.
-Respond with JSON only, no prose: {"ranking":[{"term":string,"score":number,"new":boolean,"reason":string}]}
+Respond with JSON only, no prose: {"trap":boolean,"ranking":[{"term":string,"score":number,"new":boolean,"reason":string}]}
 Rules:
+- "trap": true only if no single rendering of this source can be right across contexts: its correct English form necessarily changes from sentence to sentence (e.g. 修炼 is "cultivate" as a verb but "cultivation" as a noun), so whatever is chosen will be wrong somewhere. Otherwise false.
 - "score" is a percentage. All scores together must sum to 100.
 - 0 is always allowed: give 0 to candidates that are wrong, irrelevant or clearly worse. Never spread points just to be fair.
 - You are not limited to the listed candidates. If a better or competitive rendering exists, add it with "new": true and score it by exactly the same standard as listed ones.
@@ -274,7 +275,8 @@ ${refs}`;
     ].filter(Boolean))].sort((a, b) => a.localeCompare(b)); // sorted so list position can't hint which one is selected
     const trigger = lastClicked?.closest('.text-patch') || null;
     const hash = trigger?.dataset.hash || '';
-    return { source, current, hash, trigger, novel: novelTitle(), candidates, context: contextAround(lastClicked, source, current), refs: referenceTerms(hash || source) };
+    const popular = chips.filter((c) => c.textContent.includes('99+')).map(chipText); // 99+ WTR-LAB votes
+    return { source, current, hash, trigger, novel: novelTitle(), candidates, popular, context: contextAround(lastClicked, source, current), refs: referenceTerms(hash || source) };
   }
 
   function scan() {
@@ -340,6 +342,10 @@ ${refs}`;
   // dynamic (depends on context: never global, always checked).
   const picked = GM_getValue('pickedTerms', {});
   const termStatus = GM_getValue('termStatus', {});
+  // Renderings picked while the AI gave them ≥80%: { hash: term }. They apply provisionally in novels
+  // without their own pick, with no AI call, as long as every novel's pick for the source agrees.
+  const confident = GM_getValue('confidentTerms', {});
+  const CONFIDENT_SCORE = 80;
 
   // ---------- sync ----------
   // Optional: with a sync server URL and token set (device-local, never synced), every changed entry is
@@ -391,8 +397,29 @@ ${refs}`;
   }
   const globalPicks = () => Object.fromEntries(Object.entries(termStatus).filter(([, s]) => s.global).map(([h, s]) => [h, s.global]));
 
+  // Global at once (99+ votes, context trap). Never replaces an existing global rendering; replaces "dynamic".
+  function lockGlobal(hash, term) {
+    if (!hash || termStatus[hash]?.global) return;
+    termStatus[hash] = { global: term };
+    GM_setValue('termStatus', termStatus);
+    kvPut(['status', hash], termStatus[hash]);
+  }
+  function setConfident(hash, term) {
+    if (!hash || confident[hash] === term) return;
+    confident[hash] = term;
+    GM_setValue('confidentTerms', confident);
+    kvPut(['confident', hash], term);
+  }
+  // Confident terms for this novel: no own entry here, no status yet, and no novel picked something else
+  // (a different pick means the source depends on context, so the AI is asked again).
+  function provisionalPicks() {
+    const mine = picked[currentSerie()] || {};
+    return Object.fromEntries(Object.entries(confident).filter(([h, t]) => !(h in mine) && !termStatus[h]
+      && Object.values(picked).every((novel) => !novel[h] || novel[h] === t)));
+  }
+
   // Terms that apply in this novel (null = opted out of a global one).
-  const localTerms = () => Object.fromEntries(Object.entries({ ...globalPicks(), ...picked[currentSerie()] }).filter(([, t]) => t));
+  const localTerms = () => Object.fromEntries(Object.entries({ ...globalPicks(), ...provisionalPicks(), ...picked[currentSerie()] }).filter(([, t]) => t));
 
   // Rewrite term spans in place. The site puts the plural "s" outside the span, so the whole text is the term.
   // The site's text is kept in data-wtrrank-orig to put it back when a pick is deleted.
@@ -461,8 +488,13 @@ ${refs}`;
       const attr = `[data-hash="${cssString(h)}"]`;
       return [`.chapter-body .text-patch:not(#wtrrank)${attr}`, `.chapter-body span:not(.text-patch):has(> .text-patch${attr})`];
     });
+    const provisional = Object.keys(provisionalPicks()).flatMap((h) => {
+      const attr = `[data-hash="${cssString(h)}"]`;
+      return [`.chapter-body .text-patch:not(#wtrrank)${attr}`, `.chapter-body span:not(.text-patch):has(> .text-patch${attr})`];
+    });
     const css = '.chapter-body .text-patch:not(#wtrrank), .chapter-body span:not(.text-patch):has(> .text-patch) { color: var(--wtr-term-color) !important; }'
-      + (done.length ? `\n${done.join(',\n')} { color: inherit !important; }` : '');
+      + (done.length ? `\n${done.join(',\n')} { color: inherit !important; }` : '')
+      + (provisional.length ? `\n${provisional.join(',\n')} { color: #d39b2a !important; }` : ''); // after "done": same specificity, so it wins
     // Own <style> element instead of GM_addStyle: its return value differs between Violentmonkey inject modes.
     if (!termStyle || !termStyle.isConnected) { // first run, or the page dropped it
       termStyle = document.getElementById('wtrrank-terms') || document.createElement('style');
@@ -531,6 +563,7 @@ ${refs}`;
     if (remoteDirty.has('picked')) GM_setValue('pickedTerms', picked);
     if (remoteDirty.has('checked')) GM_setValue('checkedTerms', checked);
     if (remoteDirty.has('status')) GM_setValue('termStatus', termStatus);
+    if (remoteDirty.has('confident')) GM_setValue('confidentTerms', confident);
     remoteDirty.clear();
     applyLocalTerms();
     renderTermColors();
@@ -549,6 +582,10 @@ ${refs}`;
       else if (!value || typeof value !== 'object' || Array.isArray(value)) return;
       else if (JSON.stringify(termStatus[a]) === JSON.stringify(value)) return;
       else termStatus[a] = value;
+    } else if (kind === 'confident') {
+      if (deleted) { if (!(a in confident)) return; delete confident[a]; }
+      else if (typeof value !== 'string' || !value || confident[a] === value) return;
+      else confident[a] = value;
     } else if (kind === 'picked' || kind === 'checked') {
       if (typeof b !== 'string') return;
       const map = kind === 'picked' ? picked : checked;
@@ -568,7 +605,7 @@ ${refs}`;
     addEventListener('pagehide', flushRemote); // don't lose a pulled batch whose save was still pending
     // onChange fires only in the tab that pulled; other tabs must take its saved maps, or their next
     // local edit would write their stale copy over the pulled entries.
-    for (const [name, map] of [['pickedTerms', picked], ['checkedTerms', checked], ['termStatus', termStatus]]) {
+    for (const [name, map] of [['pickedTerms', picked], ['checkedTerms', checked], ['termStatus', termStatus], ['confidentTerms', confident]]) {
       GM_addValueChangeListener(name, (_, __, value, remote) => {
         if (!remote) return;
         for (const k of Object.keys(map)) delete map[k];
@@ -584,6 +621,7 @@ ${refs}`;
         for (const [serie, novel] of Object.entries(picked)) for (const [hash, t] of Object.entries(novel)) kvPut(['picked', serie, hash], t, 1);
         for (const [serie, novel] of Object.entries(checked)) for (const [hash, r] of Object.entries(novel)) kvPut(['checked', serie, hash], r, 1);
         for (const [hash, s] of Object.entries(termStatus)) kvPut(['status', hash], s, 1);
+        for (const [hash, t] of Object.entries(confident)) kvPut(['confident', hash], t, 1);
         if (GM_getValue('model', '')) kvPut(['model'], GM_getValue('model', ''), 1);
         GM_setValue('syncBootstrapped', true);
       }
@@ -614,6 +652,8 @@ ${refs}`;
     .wtrrank-tag { font-size: 11px; background: #1e7e34; color: #fff; border-radius: 4px; padding: 1px 5px; }
     .wtrrank-tag.current { background: #2f6fde; }
     .wtrrank-tag.previous { background: #4a4f57; }
+    .wtrrank-tag.popular { background: #8a5a00; }
+    .wtrrank-trap { color: #e8b04a; font-size: 12.5px; margin-bottom: 8px; }
     .wtrrank-bar { height: 4px; background: #3a3d42; border-radius: 2px; margin: 6px 0 4px; overflow: hidden; }
     .wtrrank-bar > div { height: 100%; background: #4a7bd0; }
     .wtrrank-reason { color: #aab; font-size: 12.5px; }
@@ -681,7 +721,8 @@ ${refs}`;
     const counts = pickCounts(hash);
     const scope = termStatus[hash]?.dynamic ? 'This novel (dynamic: always checked)'
       : local ? (global && global !== local ? `This novel (global is "${global}")` : 'This novel')
-        : `Global, picked in ${counts.find(([t]) => t === global)?.[1] || 0} novels`;
+        : !global ? `Provisional: AI gave it ≥${CONFIDENT_SCORE}% elsewhere. Save to confirm, AI Rank to check`
+          : `Global, picked in ${counts.find(([t]) => t === global)?.[1] || 0} novels`;
     const data = { hash, source: hash };
     const input = h('input', { class: 'wtrrank-pop-input border border-border bg-card', value: term, autocomplete: 'off', 'aria-label': 'Term' });
     const save = () => { const v = input.value.trim(); if (v) pickTerm(data, v); closePop(); };
@@ -725,9 +766,13 @@ ${refs}`;
   }
 
   // Rows for the result panel.
-  function renderRows(body, list, data) {
+  // A term with 99+ WTR-LAB votes locks only when no other chip has 99+ (a split crowd means context matters).
+  function renderRows(body, list, data, trap) {
+    const popular = data.popular?.length === 1 ? data.popular[0] : null;
     body.replaceChildren(h('div', { class: 'wtrrank-muted', style: 'margin-bottom:8px' },
-      'Tap a term to use it in this novel.'));
+      'Tap a term to use it in this novel.'),
+      trap && h('div', { class: 'wtrrank-trap' },
+        '⚠ Context trap: no single rendering fits every context. The term you pick becomes global, so it is never ranked again.'));
     list.forEach((x, i) => {
       const row = h('div', { class: 'wtrrank-row', tabindex: '0', role: 'button' },
         h('div', { class: 'wtrrank-top' },
@@ -736,11 +781,14 @@ ${refs}`;
           x.isNew && h('span', { class: 'wtrrank-tag', title: 'Proposed by the AI' }, 'NEW'),
           sameTerm(x.term, data.current) && h('span', { class: 'wtrrank-tag current', title: 'Currently selected in the text' }, 'CURRENT'),
           data.previous?.includes(x.term) && h('span', { class: 'wtrrank-tag previous', title: 'Picked in another novel' }, 'PREVIOUS'),
+          x.term === popular && h('span', { class: 'wtrrank-tag popular', title: '99+ WTR-LAB votes: picking it makes it global' }, '99+'),
           h('span', { class: 'wtrrank-score' }, `${x.score}%`)),
         h('div', { class: 'wtrrank-bar' }, h('div', { style: `width:${x.score}%` })),
         h('div', { class: 'wtrrank-reason' }, x.reason));
       // Use it in the text right away, then close the list and the term's tooltip.
       const pick = () => {
+        if (trap || x.term === popular) lockGlobal(data.hash, x.term);
+        if (x.score >= CONFIDENT_SCORE) setConfident(data.hash, x.term);
         pickTerm(data, x.term);
         document.querySelector('.wtrrank-overlay')?.remove();
         closeTooltip(data);
@@ -761,9 +809,10 @@ ${refs}`;
     const body = openPanel(`Tier list: ${data.source || data.current}`, () => openConfig(() => runRanking(data)), () => closeTooltip(data));
     body.append(h('div', { class: 'wtrrank-muted' }, `Asking ${cfg.model}…`));
     try {
-      const list = normalize(parseRanking(await chat(cfg, SYSTEM, buildPrompt(data)), data.candidates));
+      const text = await chat(cfg, SYSTEM, buildPrompt(data));
+      const list = normalize(parseRanking(text, data.candidates));
       markChecked(data);
-      renderRows(body, list, data);
+      renderRows(body, list, data, /"trap"\s*:\s*true/.test(text)); // regex: survives the loose-JSON fallback
     } catch (err) {
       body.replaceChildren(h('div', { class: 'wtrrank-err' }, String(err.message || err)));
     }
@@ -849,6 +898,7 @@ ${refs}`;
     for (const k of Object.keys(checked)) delete checked[k];
     for (const k of Object.keys(picked)) delete picked[k]; // the page keeps showing picks until reload
     for (const k of Object.keys(termStatus)) delete termStatus[k];
+    for (const k of Object.keys(confident)) delete confident[k];
     renderTermColors();
     document.querySelector('.wtrrank-overlay')?.remove();
   }
