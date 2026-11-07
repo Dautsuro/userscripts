@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.6.1
+// @version      1.6.2
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -786,8 +786,8 @@ ${refs}`;
     const popular = popularTerm(data.popular);
     body.replaceChildren(h('div', { class: 'wtrrank-muted', style: 'margin-bottom:8px' },
       'Tap a term to use it in this novel.'),
-      trap && h('div', { class: 'wtrrank-trap' },
-        '⚠ Context trap: no single rendering fits every context. The term you pick becomes global, so it is never ranked again.'));
+      trap ? h('div', { class: 'wtrrank-trap' }, // native replaceChildren() would print "false"
+        '⚠ Context trap: no single rendering fits every context. The term you pick becomes global, so it is never ranked again.') : '');
     list.forEach((x, i) => {
       const row = h('div', { class: 'wtrrank-row', tabindex: '0', role: 'button' },
         h('div', { class: 'wtrrank-top' },
