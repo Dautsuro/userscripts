@@ -73,7 +73,7 @@ Open the `.user.js` file in Firefox with Violentmonkey installed, or add it from
 
 ## Clear Site Data
 
-File: `clear-site-data.user.js` · runs on every site
+File: `clear-site-data.user.js` · runs on every site and local `file://` pages
 
 Violentmonkey menu, **Clear ALL data for this site**: after a confirm, deletes everything the current site saved, then reloads the page.
 

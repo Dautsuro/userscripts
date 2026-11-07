@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         Clear Site Data
 // @namespace    clear-site-data
-// @version      1.0.0
+// @version      1.0.1
 // @description  Menu button that wipes everything the current site saved in the browser: cookies (HttpOnly too), localStorage, sessionStorage, IndexedDB, Cache Storage, service workers, OPFS files, window.name. Then reloads.
 // @match        *://*/*
+// @match        file:///*
 // @grant        GM_registerMenuCommand
 // @grant        GM_cookie
 // @noframes
