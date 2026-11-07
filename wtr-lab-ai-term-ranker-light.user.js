@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.6.5
+// @version      1.6.6
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -452,6 +452,13 @@ ${refs}`;
     if (term === undefined) delete mine[data.hash]; else mine[data.hash] = term;
     GM_setValue('pickedTerms', picked);
     if (term === undefined) kvDel(['picked', serie, data.hash]); else kvPut(['picked', serie, data.hash], term);
+    // A deleted pick is no longer verified: drop it from checked, or referenceTerms() keeps sending it to the AI.
+    if (term === undefined && checked[serie] && data.hash in checked[serie]) {
+      delete checked[serie][data.hash];
+      if (!Object.keys(checked[serie]).length) delete checked[serie];
+      GM_setValue('checkedTerms', checked);
+      kvDel(['checked', serie, data.hash]);
+    }
     updateStatus(data.hash);
     applyLocalTerms();
     if (term) markChecked({ ...data, current: term });
