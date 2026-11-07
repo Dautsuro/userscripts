@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.5.2
+// @version      1.6.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -382,6 +382,13 @@ ${refs}`;
     const k = kv && kvKey(...parts);
     if (k) kv.remove(k);
   }
+  // The model is saved per provider, so a Google key is never offered an OpenAI model.
+  const savedModel = (pid) => GM_getValue(`model:${pid}`, '');
+  {
+    const legacy = GM_getValue('model', ''), p = detectProvider(GM_getValue('apiKey', ''));
+    if (legacy && p && !savedModel(p.id)) { GM_setValue(`model:${p.id}`, legacy); kvPut(['model', p.id], legacy, 1); }
+    if (legacy && p) GM_deleteValue('model');
+  }
   function decideStatus(terms) {
     const counts = {};
     for (const t of terms) counts[t] = (counts[t] || 0) + 1;
@@ -575,7 +582,10 @@ ${refs}`;
     try { parts = JSON.parse(key); } catch (_) { return; }
     if (!Array.isArray(parts)) return;
     const [kind, a, b] = parts;
-    if (kind === 'model') { if (!deleted && typeof value === 'string' && value) GM_setValue('model', value); return; }
+    if (kind === 'model') { // the old ["model"] row has no provider: ignored
+      if (!deleted && typeof value === 'string' && value && PROVIDERS.some((p) => p.id === a)) GM_setValue(`model:${a}`, value);
+      return;
+    }
     if (typeof a !== 'string') return;
     if (kind === 'status') {
       if (deleted) { if (!(a in termStatus)) return; delete termStatus[a]; }
@@ -622,11 +632,11 @@ ${refs}`;
         for (const [serie, novel] of Object.entries(checked)) for (const [hash, r] of Object.entries(novel)) kvPut(['checked', serie, hash], r, 1);
         for (const [hash, s] of Object.entries(termStatus)) kvPut(['status', hash], s, 1);
         for (const [hash, t] of Object.entries(confident)) kvPut(['confident', hash], t, 1);
-        if (GM_getValue('model', '')) kvPut(['model'], GM_getValue('model', ''), 1);
+        for (const p of PROVIDERS) if (savedModel(p.id)) kvPut(['model', p.id], savedModel(p.id), 1);
         GM_setValue('syncBootstrapped', true);
       }
       // Heal maps that lost synced entries (e.g. overwritten by a stale tab before 1.4.0's listener).
-      for (const [k, v] of kv.entries('')) if (k !== '["model"]') applyRemote(k, v, false);
+      for (const [k, v] of kv.entries('')) applyRemote(k, v, false);
     });
     kv.start();
     // A new server (URL changed in settings) has none of our data: offer everything again.
@@ -704,7 +714,10 @@ ${refs}`;
   }
 
   const sameTerm = (a, b) => !!a && !!b && a.trim() === b.trim(); // case-sensitive: "pill" and "Pill" are different terms
-  const getCfg = () => ({ key: GM_getValue('apiKey', ''), model: GM_getValue('model', '') });
+  const getCfg = () => {
+    const key = GM_getValue('apiKey', ''), p = detectProvider(key);
+    return { key, model: p ? savedModel(p.id) : '' };
+  };
 
   // ---------- term popover ----------
   // Replaces WTR-LAB's tooltip on picked terms. Classes are the site's own (Tailwind), so it follows its theme.
@@ -829,15 +842,18 @@ ${refs}`;
     const select = h('select', { class: 'wtrrank-input' });
     const manual = h('input', { class: 'wtrrank-input', placeholder: 'Model name (used if not empty)' });
     manual.value = cfg.model;
+    let shownPid = detectProvider(cfg.key)?.id; // the provider whose saved model the fields show
     const syncUrlIn = h('input', { class: 'wtrrank-input', autocomplete: 'off', placeholder: 'http://100.x.y.z:8090 (empty = no sync)' });
     syncUrlIn.value = GM_getValue('syncUrl', '');
     const syncTokenIn = h('input', { class: 'wtrrank-input', type: 'password', autocomplete: 'off', placeholder: 'This device\'s token' });
     syncTokenIn.value = GM_getValue('syncToken', '');
 
     async function load() {
-      const p = detectProvider(keyIn.value);
+      const p = detectProvider(keyIn.value), chosen = select.value;
       select.replaceChildren();
       if (!p) { status.textContent = keyIn.value ? 'Unrecognized key format.' : ''; return; }
+      let want = manual.value.trim() || chosen; // Reload models keeps what was chosen
+      if (p.id !== shownPid) { shownPid = p.id; want = manual.value = savedModel(p.id); }
       status.textContent = `Detected ${p.name}. Loading models…`;
       try {
         const models = await listModels(keyIn.value.trim());
@@ -847,7 +863,7 @@ ${refs}`;
           if (m.warn) o.title = 'Could not confirm this is a text model';
           select.append(o);
         }
-        if (models.some((m) => m.id === cfg.model)) { select.value = cfg.model; manual.value = ''; }
+        if (models.some((m) => m.id === want)) { select.value = want; manual.value = ''; }
         status.textContent = `Detected ${p.name}: ${models.length} models${models.some((m) => m.warn) ? ' (⚠ = not confirmed as a text model)' : ''}.`;
       } catch (err) {
         status.textContent = `Detected ${p.name}. Could not list models (${err.message}). Type the model name below.`;
@@ -869,12 +885,12 @@ ${refs}`;
         h('button', {
           class: 'wtrrank-action',
           onclick: () => {
-            const model = manual.value.trim() || select.value;
-            if (!detectProvider(keyIn.value)) return (status.textContent = 'Unrecognized key format.');
+            const model = manual.value.trim() || select.value, p = detectProvider(keyIn.value);
+            if (!p) return (status.textContent = 'Unrecognized key format.');
             if (!model) return (status.textContent = 'Choose or type a model.');
             GM_setValue('apiKey', keyIn.value.trim());
-            if (model !== cfg.model) kvPut(['model'], model);
-            GM_setValue('model', model);
+            if (model !== savedModel(p.id)) kvPut(['model', p.id], model);
+            GM_setValue(`model:${p.id}`, model);
             if (syncUrlIn.value.trim() !== GM_getValue('syncUrl', '')) GM_setValue('syncResync', true);
             GM_setValue('syncUrl', syncUrlIn.value.trim());
             GM_setValue('syncToken', syncTokenIn.value.trim());
@@ -894,9 +910,9 @@ ${refs}`;
   function resetData() {
     if (!confirm('Delete all checked and picked terms in every novel (and on synced devices)? The API key, model and sync settings are kept. This cannot be undone.')) return;
     // Tombstones reach the other devices too. Their pending queue lives in the KvSync state key, so keep it.
-    if (kv) kvBatched(() => { for (const [k] of kv.entries('')) if (k !== '["model"]') kv.remove(k); });
-    const keep = ['apiKey', 'model', 'syncUrl', 'syncToken', 'syncResync', KV_STATE];
-    for (const k of GM_listValues()) if (!keep.includes(k)) GM_deleteValue(k);
+    if (kv) kvBatched(() => { for (const [k] of kv.entries('')) if (!k.startsWith('["model"')) kv.remove(k); });
+    const keep = ['apiKey', 'syncUrl', 'syncToken', 'syncResync', KV_STATE];
+    for (const k of GM_listValues()) if (!keep.includes(k) && !k.startsWith('model:')) GM_deleteValue(k);
     for (const k of Object.keys(checked)) delete checked[k];
     for (const k of Object.keys(picked)) delete picked[k]; // the page keeps showing picks until reload
     for (const k of Object.keys(termStatus)) delete termStatus[k];
