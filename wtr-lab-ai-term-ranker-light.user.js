@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.6.9
+// @version      1.6.10
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -184,13 +184,19 @@
 
   const currentSerie = () => (location.pathname.match(/\/novel\/(\d+)/) || [])[1] || '';
 
-  function savedTerms() {
-    let raw;
-    try { raw = JSON.parse(localStorage.getItem('user_terms_v2') || '[]'); } catch (_) { raw = []; }
-    const serie = currentSerie();
-    return (Array.isArray(raw) ? raw : [])
+  // Sources of the user's global WTR-LAB terms (no novel filter). This runs on every DOM change, so the
+  // stored text is parsed again only when it differs from last time.
+  let termsRaw = null, termsFroms = new Set();
+  function globalTermFroms() {
+    const raw = localStorage.getItem('user_terms_v2') || '[]';
+    if (raw === termsRaw) return termsFroms;
+    let list;
+    try { list = JSON.parse(raw); } catch (_) { list = []; }
+    termsRaw = raw;
+    termsFroms = new Set((Array.isArray(list) ? list : [])
       .map((t) => (Array.isArray(t) ? { to: t[1], from: t[2], filter: t[4] } : t))
-      .filter((t) => t && t.from && t.to && (!t.filter?.serie_id || String(t.filter.serie_id) === serie));
+      .filter((t) => t && t.from && t.to && !t.filter?.serie_id).map((t) => t.from));
+    return termsFroms;
   }
 
   const SYSTEM = `You judge English translations of one term from a Chinese web novel and produce a scored tier list.
@@ -494,20 +500,18 @@ ${refs}`;
   }
   function renderTermColorsUnsafe() {
     const serie = currentSerie();
-    const globalFroms = new Set(savedTerms().filter((t) => !t.filter?.serie_id).map((t) => t.from));
+    const globalFroms = globalTermFroms();
     const hashes = new Set(Object.keys(checked[serie] || {}));
     for (const novel of Object.values(checked)) {
       for (const h of Object.keys(novel)) if (globalFroms.has(h)) hashes.add(h);
     }
     for (const h of Object.keys(globalPicks())) hashes.add(h); // global picks need no check in new novels
-    const done = [...hashes].flatMap((h) => {
+    const sel = (h) => {
       const attr = `[data-hash="${cssString(h)}"]`;
       return [`.chapter-body .text-patch:not(#wtrrank)${attr}`, `.chapter-body span:not(.text-patch):has(> .text-patch${attr})`];
-    });
-    const provisional = Object.keys(provisionalPicks()).flatMap((h) => {
-      const attr = `[data-hash="${cssString(h)}"]`;
-      return [`.chapter-body .text-patch:not(#wtrrank)${attr}`, `.chapter-body span:not(.text-patch):has(> .text-patch${attr})`];
-    });
+    };
+    const done = [...hashes].flatMap(sel);
+    const provisional = Object.keys(provisionalPicks()).flatMap(sel);
     const css = '.chapter-body .text-patch:not(#wtrrank), .chapter-body span:not(.text-patch):has(> .text-patch) { color: var(--wtr-term-color) !important; }'
       + (done.length ? `\n${done.join(',\n')} { color: inherit !important; }` : '')
       + (provisional.length ? `\n${provisional.join(',\n')} { color: #d39b2a !important; }` : ''); // after "done": same specificity, so it wins
@@ -939,9 +943,10 @@ ${refs}`;
     const keep = ['apiKey', 'syncUrl', 'syncToken', 'syncResync', KV_STATE];
     for (const k of GM_listValues()) if (!keep.includes(k) && !k.startsWith('model:')) GM_deleteValue(k);
     for (const k of Object.keys(checked)) delete checked[k];
-    for (const k of Object.keys(picked)) delete picked[k]; // the page keeps showing picks until reload
+    for (const k of Object.keys(picked)) delete picked[k];
     for (const k of Object.keys(termStatus)) delete termStatus[k];
     for (const k of Object.keys(confident)) delete confident[k];
+    applyLocalTerms(); // puts WTR-LAB's own text back on every term we had rewritten
     renderTermColors();
     document.querySelector('.wtrrank-overlay')?.remove();
   }
