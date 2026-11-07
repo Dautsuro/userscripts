@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.6.7
+// @version      1.6.8
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -916,36 +916,13 @@ ${refs}`;
           },
         }, 'Save')),
       h('div', { class: 'wtrrank-actions', style: 'justify-content:flex-start;border-top:1px solid #3a3d42;padding-top:12px' },
-        h('button', { class: 'wtrrank-action danger', onclick: resetData }, 'Reset saved data'),
-        // shortcut: one-off cleanup for picks deleted before 1.6.6, remove in the next version.
-        h('button', { class: 'wtrrank-action secondary', onclick: clearUnpickedChecked }, 'Clear unpicked checked terms')),
+        h('button', { class: 'wtrrank-action danger', onclick: resetData }, 'Reset saved data')),
       h('div', { class: 'wtrrank-muted' }, 'Deletes every checked and picked term in all novels, on every synced device too. Keeps the API key, model and sync settings.'));
     if (cfg.key) load();
   }
 
   const syncStatusText = ({ lastOkAt, lastError }) =>
     `Last sync: ${lastOkAt ? new Date(lastOkAt).toLocaleString() : 'not yet'}${lastError ? ` · error: ${lastError}` : ''}`;
-
-  // Checked terms that no novel's pick or global rendering backs (e.g. picks deleted before 1.6.6, which
-  // stayed in checked and kept being sent to the AI as verified references).
-  function clearUnpickedChecked() {
-    const globals = globalPicks(), drop = [];
-    for (const [serie, novel] of Object.entries(checked)) {
-      for (const hash of Object.keys(novel)) if (!picked[serie]?.[hash] && !globals[hash]) drop.push([serie, hash]);
-    }
-    if (!drop.length) return alert('No unpicked checked terms.');
-    if (!confirm(`Remove ${drop.length} checked terms that are not picked (on synced devices too)? This includes terms ranked by the AI but never picked. They will be shown as unchecked again.`)) return;
-    kvBatched(() => {
-      for (const [serie, hash] of drop) {
-        delete checked[serie][hash];
-        if (!Object.keys(checked[serie]).length) delete checked[serie];
-        kvDel(['checked', serie, hash]);
-      }
-    });
-    GM_setValue('checkedTerms', checked);
-    renderTermColors();
-    alert(`Removed ${drop.length} checked terms.`);
-  }
 
   function resetData() {
     if (!confirm('Delete all checked and picked terms in every novel (and on synced devices)? The API key, model and sync settings are kept. This cannot be undone.')) return;
