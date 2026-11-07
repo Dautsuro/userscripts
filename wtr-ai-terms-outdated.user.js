@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR AI Terms (outdated)
-// @namespace    wtr-lab-ai-term-ranker
-// @version      1.12.2
+// @namespace    wtr-ai-terms-outdated
+// @version      1.12.3
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
