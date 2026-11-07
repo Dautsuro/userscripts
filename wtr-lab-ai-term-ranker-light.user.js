@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.6.10
+// @version      1.7.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -233,14 +233,18 @@ ${refs}`;
   // ---------- page integration ----------
   let lastClicked = null;
   let bypassOnce = false; // let the next tap on a picked term reach WTR-LAB's own tooltip
+  let autoRank = null; // { until }: a term to rank by itself was just tapped; scan() presses AI Rank in its tooltip
   document.addEventListener('click', (e) => {
     if (!(e.target.closest && e.target.closest('.chapter-body'))) return;
     lastClicked = e.target;
-    // Terms picked with this script get our popover instead of the site's (capture phase runs before React's).
+    autoRank = null;
     const el = e.target.closest('.text-patch[data-hash]');
-    if (!el || bypassOnce || !(el.dataset.hash in localTerms())) { bypassOnce = false; return; }
-    e.preventDefault(); e.stopPropagation();
-    openTermPopover(el);
+    if (!el || bypassOnce) { bypassOnce = false; return; }
+    // Terms picked with this script get our popover instead of the site's (capture phase runs before React's).
+    if (el.dataset.hash in localTerms()) {
+      e.preventDefault(); e.stopPropagation();
+      openTermPopover(el);
+    } else if (!checkedHashes().has(el.dataset.hash)) autoRank = { until: Date.now() + 5000 }; // still term-colored
   }, true);
 
   // Term elements showing the selected translation are replaced by ⟦source⟧ so the AI never sees the current choice.
@@ -266,17 +270,40 @@ ${refs}`;
 
   const novelTitle = () => document.title.replace(/\s+Chapter\s+\d+.*$/i, '').replace(/(^|\s*-\s*)WTR-LAB\s*$/i, '').trim(); // franchise hint for official renderings
 
+  // Alternatives list is rendered next to the column holding the "To" label.
+  function tooltipChips(toLabel) {
+    const alts = toLabel.parentElement?.nextElementSibling;
+    return alts ? [...(alts.querySelectorAll('button,[role="button"]').length ? alts.querySelectorAll('button,[role="button"]') : alts.children)] : [];
+  }
+  const chipText = (c) => {
+    const clone = c.cloneNode(true); // drop the vote-count element ("99+", "96") so it doesn't glue to the term
+    clone.querySelectorAll('*').forEach((e) => !e.children.length && /^\d+\+?$/.test(e.textContent.trim()) && e.remove());
+    return clone.textContent.replace(/\s+/g, ' ').trim().replace(/^\d+\+?\s+/, '');
+  };
+
+  // Press AI Rank by itself once the tooltip has loaded its alternatives, or the AI gets a partial list:
+  // no loading spinner in the tooltip and the list unchanged for 400 ms (and not empty, unless 4 s passed:
+  // some terms have no alternatives). After 8 s it presses anyway.
+  // Stops when the tooltip goes away or another tap replaced `token`.
+  function pressWhenLoaded(btn, root, toLabel, token) {
+    const box = btn.closest('[data-slot="popover-content"]') || root;
+    const started = Date.now();
+    let last = null, since = 0;
+    const tick = () => {
+      if (!btn.isConnected || autoRank !== token) return;
+      const list = tooltipChips(toLabel).map(chipText).join('\n'), now = Date.now();
+      if (list !== last) { last = list; since = now; }
+      const loading = box.querySelector('.animate-spin, [aria-busy="true"], [role="progressbar"]');
+      if ((!loading && now - since >= 400 && (list || now - started >= 4000)) || now - started >= 8000) { autoRank = null; btn.click(); }
+      else setTimeout(tick, 100);
+    };
+    tick();
+  }
+
   function readTooltip(root, toLabel) {
     const source = ((root.innerText || '').match(/From\s+([^\n]+)/) || [])[1]?.trim() || '';
-    // Alternatives list is rendered next to the column holding the "To" label.
-    const alts = toLabel.parentElement?.nextElementSibling;
-    const chips = alts ? [...(alts.querySelectorAll('button,[role="button"]').length ? alts.querySelectorAll('button,[role="button"]') : alts.children)] : [];
+    const chips = tooltipChips(toLabel);
     const current = lastClicked ? lastClicked.textContent.trim() : '';
-    const chipText = (c) => {
-      const clone = c.cloneNode(true); // drop the vote-count element ("99+", "96") so it doesn't glue to the term
-      clone.querySelectorAll('*').forEach((e) => !e.children.length && /^\d+\+?$/.test(e.textContent.trim()) && e.remove());
-      return clone.textContent.replace(/\s+/g, ' ').trim().replace(/^\d+\+?\s+/, '');
-    };
     const candidates = [...new Set([
       ...chips.map(chipText),
       current,
@@ -307,9 +334,13 @@ ${refs}`;
       ours.textContent = '🏆 AI Rank';
       ours.addEventListener('click', (e) => {
         e.preventDefault(); e.stopPropagation();
+        autoRank = null; // a manual tap must not be followed by a second, automatic one
         runRanking(readTooltip(root, toLabel));
       });
       btn.after(ours);
+      // Only a button added after the tap counts: a closing tooltip of the previous term already had its own.
+      // If the tooltip re-renders while loading, its new button takes over; the first press ends it.
+      if (autoRank && Date.now() < autoRank.until) pressWhenLoaded(ours, root, toLabel, autoRank);
     }
 
     // Term editor: "Clear" button next to the Replacement Text label (deleting text is tedious on mobile).
@@ -498,7 +529,8 @@ ${refs}`;
   function renderTermColors() {
     try { renderTermColorsUnsafe(); } catch (err) { console.error('[wtrrank] term colors:', err); }
   }
-  function renderTermColorsUnsafe() {
+  // Terms shown as plain text, i.e. not term-colored (provisional ones get their own color on top).
+  function checkedHashes() {
     const serie = currentSerie();
     const globalFroms = globalTermFroms();
     const hashes = new Set(Object.keys(checked[serie] || {}));
@@ -506,6 +538,10 @@ ${refs}`;
       for (const h of Object.keys(novel)) if (globalFroms.has(h)) hashes.add(h);
     }
     for (const h of Object.keys(globalPicks())) hashes.add(h); // global picks need no check in new novels
+    return hashes;
+  }
+  function renderTermColorsUnsafe() {
+    const hashes = checkedHashes();
     const sel = (h) => {
       const attr = `[data-hash="${cssString(h)}"]`;
       return [`.chapter-body .text-patch:not(#wtrrank)${attr}`, `.chapter-body span:not(.text-patch):has(> .text-patch${attr})`];
@@ -789,19 +825,13 @@ ${refs}`;
     pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - w - 8)) + scrollX}px`;
   }
 
-  // Open the site's tooltip for this term; with rank, also press our AI Rank button once it's injected.
+  // Open the site's tooltip for this term; with rank, scan() also presses AI Rank in it once loaded.
   // Candidates come from that tooltip, which is why ranking goes through it.
   function viaSiteTooltip(el, rank) {
     closePop();
     bypassOnce = true;
-    el.click();
-    if (!rank) return;
-    const started = Date.now();
-    const tick = () => {
-      const btn = document.querySelector('[data-slot="popover-content"] .wtrrank-btn');
-      if (btn) btn.click(); else if (Date.now() - started < 3000) setTimeout(tick, 50);
-    };
-    tick();
+    el.click(); // the click handler resets autoRank, so set it after
+    if (rank) autoRank = { until: Date.now() + 5000 };
   }
 
   // Rows for the result panel.
