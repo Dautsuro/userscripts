@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.6.8
+// @version      1.6.9
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -173,11 +173,13 @@
   }
 
   // Scale scores to integers summing to 100 (AI arithmetic drifts); all-zero stays all-zero.
+  // Largest remainder: round down, then +1 to the biggest fractions, so no score goes negative or out of order.
   function normalize(list) {
     const total = list.reduce((a, x) => a + x.score, 0);
-    const out = list.map((x) => ({ ...x, score: total ? Math.round((x.score * 100) / total) : 0 })).sort((a, b) => b.score - a.score);
-    if (total && out.length) out[0].score += 100 - out.reduce((a, x) => a + x.score, 0);
-    return out;
+    const out = list.map((x) => { const exact = total ? (x.score * 100) / total : 0; return { ...x, score: Math.floor(exact), rest: exact % 1 }; });
+    let left = total ? 100 - out.reduce((a, x) => a + x.score, 0) : 0;
+    [...out].sort((a, b) => b.rest - a.rest).forEach((x) => { if (left > 0) { x.score++; left--; } });
+    return out.map(({ rest, ...x }) => x).sort((a, b) => b.score - a.score);
   }
 
   const currentSerie = () => (location.pathname.match(/\/novel\/(\d+)/) || [])[1] || '';
@@ -543,18 +545,24 @@ ${refs}`;
     for (const hash of changed) kvPut(['checked', serie, hash], mine[hash]);
   }
 
-  // Checked terms from every novel whose source shares a character with `source` (keeps the prompt small).
+  // Checked terms from every novel whose source shares a character with `source`. Common characters
+  // (大, 之…) match a large share of all terms, so only the MAX_REFS most relevant are sent: this novel's
+  // and global renderings first, then the most shared characters.
+  const MAX_REFS = 50;
   function referenceTerms(source) {
-    const chars = new Set(source);
-    const seen = new Set(), out = [];
-    for (const novel of Object.values(checked)) {
+    const chars = new Set(source), serie = currentSerie(), globals = globalPicks();
+    const best = new Map(); // "from\0to" -> { from, to, rank }
+    for (const [n, novel] of Object.entries(checked)) {
       for (const [from, to] of Object.entries(novel)) {
-        if (from === source || !knownRendering(from, to) || ![...from].some((c) => chars.has(c)) || seen.has(`${from}\0${to}`)) continue;
-        seen.add(`${from}\0${to}`);
-        out.push({ from, to });
+        if (from === source || !knownRendering(from, to)) continue;
+        const shared = [...new Set(from)].filter((c) => chars.has(c)).length;
+        if (!shared) continue;
+        const rank = (n === serie || globals[from] === to ? 1000 : 0) + shared;
+        const k = `${from}\0${to}`;
+        if (!(best.get(k)?.rank >= rank)) best.set(k, { from, to, rank });
       }
     }
-    return out;
+    return [...best.values()].sort((a, b) => b.rank - a.rank).slice(0, MAX_REFS).map(({ from, to }) => ({ from, to }));
   }
 
   // Renderings picked for this exact source in other novels.
@@ -617,20 +625,20 @@ ${refs}`;
     remoteDirty.add(kind);
     if (!remoteTimer) remoteTimer = setTimeout(flushRemote, 100);
   }
+  // Each tab keeps these maps in memory and saves them whole: take another tab's save (a local edit or,
+  // with sync, pulled entries), or this tab's next edit would write its stale copy over it. Sync on or off.
+  for (const [name, map] of [['pickedTerms', picked], ['checkedTerms', checked], ['termStatus', termStatus], ['confidentTerms', confident]]) {
+    GM_addValueChangeListener(name, (_, __, value, remote) => {
+      if (!remote) return;
+      for (const k of Object.keys(map)) delete map[k];
+      Object.assign(map, value || {});
+      applyLocalTerms();
+      renderTermColors();
+    });
+  }
   if (kv) {
     kv.onChange(applyRemote);
     addEventListener('pagehide', flushRemote); // don't lose a pulled batch whose save was still pending
-    // onChange fires only in the tab that pulled; other tabs must take its saved maps, or their next
-    // local edit would write their stale copy over the pulled entries.
-    for (const [name, map] of [['pickedTerms', picked], ['checkedTerms', checked], ['termStatus', termStatus], ['confidentTerms', confident]]) {
-      GM_addValueChangeListener(name, (_, __, value, remote) => {
-        if (!remote) return;
-        for (const k of Object.keys(map)) delete map[k];
-        Object.assign(map, value || {});
-        applyLocalTerms();
-        renderTermColors();
-      });
-    }
     kvBatched(() => {
       // First run with sync: offer every existing entry at clientUpdated 1, so any real edit on any device
       // wins over this old data, and two devices' old data merge instead of overwriting each other.
@@ -947,6 +955,12 @@ ${refs}`;
   console.assert(detectProvider('AIzaXYZ').id === 'gemini', 'wtrrank: gemini');
   console.assert(normalize([{ score: 1 }, { score: 1 }, { score: 1 }]).reduce((a, x) => a + x.score, 0) === 100, 'wtrrank: sum 100');
   console.assert(normalize([{ score: 0 }, { score: 0 }]).every((x) => x.score === 0), 'wtrrank: zeros');
+  console.assert(normalize(Array.from({ length: 6 }, () => ({ score: 25 }))).map((x) => x.score).join() === '17,17,17,17,16,16', 'wtrrank: rounding keeps order');
+  console.assert(normalize([...Array.from({ length: 18 }, () => ({ score: 5.5 })), { score: 1 }]).every((x) => x.score >= 0), 'wtrrank: no negative score');
+  // Bad server rows (wrong shape, unknown kind, broken key) must change nothing. '\0t' ids never exist for real.
+  for (const [k, v] of [['not json', 'x'], ['["status","\\u0000t"]', null], ['["status","\\u0000t"]', ['a']], ['["picked","\\u0000t","x"]', 42],
+    ['["checked","\\u0000t","x"]', null], ['["confident","\\u0000t"]', ''], ['["other","\\u0000t"]', 'v']]) applyRemote(k, v, false);
+  console.assert(!('\0t' in termStatus) && !('\0t' in picked) && !('\0t' in checked) && !('\0t' in confident), 'wtrrank: bad sync rows ignored');
   const many = (a, n, b = '', m = 0) => [...Array(n).fill(a), ...Array(m).fill(b)];
   console.assert(decideStatus(many('A', 5)).global === 'A' && decideStatus(many('A', 4)) === null, 'wtrrank: global at 5 identical');
   console.assert(decideStatus(many('A', 4, 'B', 1)) === null && decideStatus(many('A', 8, 'B', 1)) === null, 'wtrrank: mixed waits for 10');
