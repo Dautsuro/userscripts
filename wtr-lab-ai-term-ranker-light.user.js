@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.6.3
+// @version      1.6.4
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -200,7 +200,7 @@ Rules:
 - You are not limited to the listed candidates. If a better or competitive rendering exists, add it with "new": true and score it by exactly the same standard as listed ones.
 - Include every listed candidate exactly as written (with "new": false).
 - Consistency: REFERENCE TERMS are related terms the user already verified; they define the naming conventions to follow (how names, titles, ranks, sects, techniques and shared characters are rendered). Other translated terms that appear in the CONTEXT but are not in REFERENCE TERMS are unverified machine output and must have NO weight in your decision.
-- Grammatical number: use the plural when the term is genuinely plural in the CONTEXT (e.g. "Soul Rings" for 魂环 when several rings are meant), the singular otherwise. Do not penalize a candidate for being plural.
+- Grammatical number: in the CONTEXT the term appears as ⟦source⟧. When an "s" directly follows it (e.g. "⟦魂师⟧s"), the site already adds the plural itself, so rank the singular form first ("Soul Master", not "Soul Masters", which would give "Soul Masterss"). Otherwise use the plural when the term is genuinely plural in the CONTEXT (e.g. "Soul Rings" for 魂环 when several rings are meant), the singular when it is not. Do not penalize a candidate just for being plural.
 - Official renderings: if the NOVEL belongs to or is fan-fiction of a known franchise (e.g. Soul Land / Douluo Dalu) and the term has an established official or widely accepted English rendering in that franchise, rank that rendering first, even above a more accurate or natural one, and say so in the reason. Add it with "new": true if it is not listed. Apply this only when you are confident the rendering is established; never invent one.
 - Otherwise judge accuracy to the source meaning, fit with the context, consistency with REFERENCE TERMS, and naturalness in English.
 - "reason": one short sentence explaining why this term got this position and score.
