@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         WTR-LAB AI Term Ranker
+// @name         WTR AI Terms (outdated)
 // @namespace    wtr-lab-ai-term-ranker
-// @version      1.12.1
+// @version      1.12.2
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -767,7 +767,7 @@ Respond with JSON only: {"renderings":[{"term":string,"page":string,"reason":str
 
   function openConfig(after) {
     const cfg = getCfg();
-    const body = openPanel('AI Term Ranker — API settings');
+    const body = openPanel('WTR AI Terms (outdated) — API settings');
     const keyIn = h('input', { class: 'wtrrank-input', type: 'password', autocomplete: 'off', placeholder: 'sk-ant-… / sk-… / sk-or-… / AIza… / gsk_… / xai-…' });
     keyIn.value = cfg.key;
     const status = h('div', { class: 'wtrrank-muted' });
@@ -841,7 +841,7 @@ Respond with JSON only: {"renderings":[{"term":string,"page":string,"reason":str
     document.querySelector('.wtrrank-overlay')?.remove();
   }
 
-  GM_registerMenuCommand('AI Term Ranker settings', () => openConfig());
+  GM_registerMenuCommand('WTR AI Terms (outdated) settings', () => openConfig());
   // ---------- self-check ----------
   console.assert(detectProvider('sk-ant-api03-x').id === 'anthropic', 'wtrrank: anthropic');
   console.assert(detectProvider('sk-or-v1-x').id === 'openrouter', 'wtrrank: openrouter');

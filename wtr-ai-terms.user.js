@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         WTR-LAB AI Term Ranker Light
+// @name         WTR AI Terms
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.7.1
+// @version      1.7.2
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -703,7 +703,7 @@ ${refs}`;
     // A new server (URL changed in settings) has none of our data: offer everything again.
     if (GM_getValue('syncResync', false)) { GM_deleteValue('syncResync'); kv.resync?.(); }
     // After a server restore, re-push edits newer than the backup (see the server README).
-    GM_registerMenuCommand('AI Term Ranker Light: resync with server', () => kv.resync?.());
+    GM_registerMenuCommand('WTR AI Terms: resync with server', () => kv.resync?.());
   }
 
   // ---------- UI ----------
@@ -898,7 +898,7 @@ ${refs}`;
 
   function openConfig(after) {
     const cfg = getCfg();
-    const body = openPanel('AI Term Ranker Light — API settings');
+    const body = openPanel('WTR AI Terms — API settings');
     const keyIn = h('input', { class: 'wtrrank-input', type: 'password', autocomplete: 'off', placeholder: 'sk-ant-… / sk-… / sk-or-… / AIza… / gsk_… / xai-…' });
     keyIn.value = cfg.key;
     const status = h('div', { class: 'wtrrank-muted' });
@@ -987,7 +987,7 @@ ${refs}`;
     document.querySelector('.wtrrank-overlay')?.remove();
   }
 
-  GM_registerMenuCommand('AI Term Ranker Light settings', () => openConfig());
+  GM_registerMenuCommand('WTR AI Terms settings', () => openConfig());
   // ---------- self-check ----------
   console.assert(detectProvider('sk-ant-api03-x').id === 'anthropic', 'wtrrank: anthropic');
   console.assert(detectProvider('sk-or-v1-x').id === 'openrouter', 'wtrrank: openrouter');

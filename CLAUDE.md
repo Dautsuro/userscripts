@@ -6,7 +6,7 @@ Violentmonkey userscripts, run in Firefox on the user's PC and Android phone.
 
 Scripts that need data shared between devices use the user's own PocketBase server, not just `GM_setValue`.
 Server repo and operations: `C:\Projects\databases` (see its README.md and CLAUDE.md).
-Worked example: `wtr-lab-ai-term-ranker-light.user.js` — copy its patterns.
+Worked example: `wtr-ai-terms.user.js` — copy its patterns.
 
 ### Header
 
