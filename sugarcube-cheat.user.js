@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SugarCube Cheat
 // @namespace    sugarcube-cheat
-// @version      1.0.0
+// @version      1.0.1
 // @description  Local SugarCube games: edit and freeze variables, see what a link will change, jump to any passage, change log, variable watcher, unlimited undo. Alt+C opens the panel.
 // @match        file:///*
 // @grant        GM_getValue
@@ -513,7 +513,8 @@
       if (n === ui.host) return null;
       const info = linkInfo.get(n);
       if (info) return { el: n, info };
-      if (n.dataset?.passage != null && n.closest('a, button, [data-passage]') === n && !n.matches('img')) {
+      // Only link-like elements: the passage box itself also carries data-passage (the current passage).
+      if (n.dataset?.passage != null && n.matches('a, button, area, .link-internal, [role="link"]')) {
         return { el: n, info: { dest: n.dataset.passage, src: n.dataset.setter ? `<<set ${n.dataset.setter}>>` : '' } };
       }
     }
