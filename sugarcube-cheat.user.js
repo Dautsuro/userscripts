@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SugarCube Cheat
 // @namespace    sugarcube-cheat
-// @version      1.0.3
+// @version      1.0.4
 // @description  Local SugarCube games: edit and freeze variables, see what a link will change, jump to any passage, change log, variable watcher, unlimited undo. Alt+C opens the panel.
 // @match        file:///*
 // @grant        GM_getValue
@@ -134,6 +134,7 @@
   // control items ({ctl}) that evalChanges evaluates; loops and timers make their content "maybe".
   const SKIP_TAGS = new Set(['link', 'button', 'linkreplace', 'linkappend', 'linkprepend', 'click', 'widget', 'listbox', 'cycle']);
   const MAYBE_TAGS = new Set(['if', 'switch', 'for', 'timed', 'repeat']);
+  const LOOP_WHY = { for: 'inside a loop', timed: 'after a delay', repeat: 'repeats on a timer' };
   const unquote = (s) => s.trim().replace(/^\[\[|\]\]$/g, '').replace(/^(["'])(.*)\1$/, '$2');
   function extractChanges(src) {
     const out = [], stack = [];
@@ -152,7 +153,7 @@
       if (SKIP_TAGS.has(name) || MAYBE_TAGS.has(name)) {
         const emitted = !skipped && MAYBE_TAGS.has(name);
         stack.push({ name, emitted });
-        if (emitted) out.push(name === 'if' || name === 'switch' ? { ctl: name, expr: args.trim() } : { ctl: 'loop' });
+        if (emitted) out.push(name === 'if' || name === 'switch' ? { ctl: name, expr: args.trim() } : { ctl: 'loop', name });
         continue;
       }
       if (skipped) continue;
@@ -224,30 +225,59 @@
     }
     return true;
   }
+  // A condition part that couldn't be worked out, in short words: common patterns get a phrase,
+  // anything else is the code with $ and quotes dropped (`isDateBetween gameDate, 20:00, 21:59`).
+  function say(expr) {
+    let s = expr.trim(), not = '';
+    const neg = s.match(/^(?:!\s*|not\s+)([\s\S]+)$/);
+    if (neg) { not = 'not '; s = neg[1].trim(); }
+    const call = s.match(/^([\w$.]+)\s*\(([\s\S]*)\)$/);
+    const times = call ? call[2].match(/\b\d{1,2}:\d{2}\b/g) : null;
+    const str = (a) => a.trim().replace(/^(["'`])([\s\S]*)\1$/, '$2');
+    let out;
+    if (call && times && /time|date|hour|clock/i.test(call[1])) out = times.length >= 2 ? `${not}between ${times[0]} and ${times[1]}` : `${not}at ${times[0]}`;
+    else if (call && /^visited$/.test(call[1]) && call[2].trim()) out = `${not ? 'not yet ' : ''}visited ${splitTop(call[2], ',').map(str).join(', ')}`;
+    else if (/^previous\(\)\s*(?:is|===?|eq)\s*(["'])([\s\S]*)\1$/.test(s)) out = `${not}coming from ${str(s.replace(/^previous\(\)\s*(?:is|===?|eq)\s*/, ''))}`;
+    else if (/\b(?:random|randomFloat|either)\s*\(/.test(s)) out = `${not}random chance`;
+    else {
+      out = (call ? `${call[1]} ${call[2]}`.trim() : s).replace(/\$(?=[A-Za-z_])/g, '').replace(/(["'])((?:\\.|(?!\1)[^\\])*)\1/g, '$2');
+      out = not + out;
+    }
+    return out.length > 70 ? `${out.slice(0, 67)}…` : out;
+  }
   // true / false, or '?' when the condition can't be worked out without running game code.
   // and/or are worked out part by part, so `gameFn() and $q is 8` is false when $q isn't 8.
+  // `why` says, for '?', which part is unknown.
   const OR_RE = /\|\||\s+or\s+/y, AND_RE = /&&|\s+and\s+/y;
-  function evalCond(expr, vars, temp, doubt = new Set()) {
+  // `many`: the reason joins several parts with and/or, so it needs brackets inside another one.
+  const group = (p) => (p.many ? `(${p.why})` : p.why);
+  function condInfo(expr, vars, temp, doubt) {
     expr = expr.trim();
     if (splitTop(expr, '?').length === 1) { // a top-level ?: binds weaker than and/or, so don't split those
-      const ors = splitTop(expr, OR_RE);
-      if (ors.length > 1) {
-        const v = ors.map((e) => evalCond(e, vars, temp, doubt));
-        return v.includes(true) ? true : v.includes('?') ? '?' : false;
-      }
-      const ands = splitTop(expr, AND_RE);
-      if (ands.length > 1) {
-        const v = ands.map((e) => evalCond(e, vars, temp, doubt));
-        return v.includes(false) ? false : v.includes('?') ? '?' : true;
+      for (const [re, win, word] of [[OR_RE, true, ' or '], [AND_RE, false, ' and ']]) {
+        const parts = splitTop(expr, re);
+        if (parts.length < 2) continue;
+        const v = parts.map((e) => condInfo(e, vars, temp, doubt));
+        if (v.some((p) => p.v === win)) return { v: win };
+        const unk = v.filter((p) => p.v === '?');
+        if (unk.length === 1) return unk[0];
+        return unk.length ? { v: '?', why: unk.map(group).join(word), many: true } : { v: !win };
       }
     }
-    if (wrapped(expr)) return evalCond(expr.slice(1, -1), vars, temp, doubt);
-    try { return !!evalLeaf(expr, vars, temp, doubt); } catch { return '?'; }
+    if (wrapped(expr)) return condInfo(expr.slice(1, -1), vars, temp, doubt);
+    try { return { v: !!evalLeaf(expr, vars, temp, doubt) }; } catch { return { v: '?', why: say(expr) }; }
   }
+  const evalCond = (expr, vars, temp, doubt = new Set()) => condInfo(expr, vars, temp, doubt).v;
   // Next branch of an if/switch: `v` is this branch's condition; earlier branches may already be taken.
-  function nextBranch(f, v) {
+  // f.own: this branch's own unknown condition; f.why: everything this branch needs to run.
+  function nextBranch(f, v, own = { why: '' }) {
+    if (f.cur === '?' && f.own.why) f.notWhy.push(f.own); // this branch only runs if that earlier maybe-branch didn't
     f.cur = f.taken === true ? false : f.taken === false ? v : v === false ? false : '?';
     f.taken = f.taken === true || v === true ? true : f.taken === false && v === false ? false : '?';
+    f.own = v === '?' ? own : { why: '' };
+    const parts = f.cur === '?' ? [...f.notWhy.map((p) => `not ${group(p)}`), f.own.why && (f.notWhy.length ? group(f.own) : f.own.why)].filter(Boolean) : [];
+    f.why = parts.join(' and ');
+    f.many = parts.length > 1 || (!f.notWhy.length && !!f.own.many);
   }
   // Applies the changes to `vars` (a copy) in order and returns the result per variable.
   // Conditions are evaluated where they appear, so branches that won't run are left out.
@@ -260,34 +290,43 @@
         // Later branches are checked against the values from before an earlier "maybe" branch ran.
         const sv = f?.snap?.vars ?? vars, sd = f?.snap?.doubt ?? doubt;
         const snapIfMaybe = (fr) => { if (fr.cur === '?' && !fr.snap) fr.snap = { vars: cloneVal(vars), doubt: new Set(doubt) }; };
-        if (c.ctl === 'if') { const v = evalCond(c.expr, vars, temp, doubt); frames.push({ cur: v, taken: v }); snapIfMaybe(frames[frames.length - 1]); }
-        else if (c.ctl === 'switch') {
+        if (c.ctl === 'if') {
+          const own = condInfo(c.expr, vars, temp, doubt);
+          frames.push({ cur: own.v, taken: own.v, why: own.why || '', many: !!own.many, own: own.v === '?' ? own : { why: '' }, notWhy: [] });
+          snapIfMaybe(frames[frames.length - 1]);
+        } else if (c.ctl === 'switch') {
           let sw = '?'; try { sw = { v: evalLeaf(c.expr, vars, temp, doubt) }; } catch { /* unknown */ }
-          frames.push({ sw, cur: false, taken: false });
-        } else if (c.ctl === 'loop') frames.push({ cur: '?', taken: '?' });
+          frames.push({ sw, swExpr: c.expr, cur: false, taken: false, why: '', own: { why: '' }, notWhy: [] });
+        } else if (c.ctl === 'loop') frames.push({ cur: '?', taken: '?', why: LOOP_WHY[c.name] || 'inside a loop', own: { why: '' }, notWhy: [] });
         else if (c.ctl === 'end') frames.pop();
-        else if (f && c.ctl === 'elseif') { nextBranch(f, f.taken === true ? false : evalCond(c.expr, sv, temp, sd)); snapIfMaybe(f); }
-        else if (f && c.ctl === 'else') { nextBranch(f, true); snapIfMaybe(f); }
+        else if (f && c.ctl === 'elseif') {
+          const own = f.taken === true ? { v: false } : condInfo(c.expr, sv, temp, sd);
+          nextBranch(f, own.v, own);
+          snapIfMaybe(f);
+        } else if (f && c.ctl === 'else') { nextBranch(f, true); snapIfMaybe(f); }
         else if (f && c.ctl === 'case') {
           let v = false;
           for (const e of c.exprs) {
             if (f.sw === '?') { v = '?'; break; }
             try { if (evalLeaf(e, sv, temp, sd) === f.sw.v) { v = true; break; } } catch { v = '?'; }
           }
-          nextBranch(f, v);
+          nextBranch(f, v, { why: `${say(f.swExpr)} is ${c.exprs.map((e) => say(e)).join(' or ')}`, many: c.exprs.length > 1 });
           snapIfMaybe(f);
         }
         continue;
       }
       if (frames.some((f) => f.cur === false)) continue; // this branch won't run
       const maybe = frames.some((f) => f.cur === '?');
+      const whys = frames.filter((f) => f.cur === '?' && f.why);
+      const why = whys.map((f) => (whys.length > 1 ? group(f) : f.why)).join(' and ');
       if (c.code) { notes.push({ code: true }); continue; }
-      if (c.goto) { notes.push({ goto: c.goto, maybe }); continue; }
+      if (c.goto) { notes.push({ goto: c.goto, maybe, why }); continue; }
       const path = targetPath(c.target);
       const key = path ? pathKey(path) : c.target;
       const prev = res.get(key);
-      const entry = prev || { label: path ? pathLabel(path) : c.target.slice(1), old: path ? cloneVal(getAt(vars, path)) : undefined, maybe: false };
+      const entry = prev || { label: path ? pathLabel(path) : c.target.slice(1), old: path ? cloneVal(getAt(vars, path)) : undefined, maybe: false, why: new Set() };
       entry.maybe ||= maybe;
+      if (maybe) entry.why.add(why);
       res.set(key, entry);
       // A guessed or unknown value: later conditions that read it give '?'.
       if (maybe || !path || entry.raw) doubt.add(path || [c.target.match(/^\$([\w$]+)/)?.[1] ?? '']);
@@ -298,7 +337,7 @@
       else if (c.op === '--') val = cur - 1;
       else if (c.op === 'unset') { deleteAt(vars, path); entry.new = undefined; continue; } else {
         try { val = evalExpr(c.rhs, vars, temp); } catch { entry.raw = `${c.op} ${c.rhs}`; doubt.add(path); continue; }
-        if (doubtful(c.rhs, doubt)) { entry.maybe = true; doubt.add(path); } // computed from a guess
+        if (doubtful(c.rhs, doubt)) { entry.maybe = true; entry.why.add(''); doubt.add(path); } // computed from a guess
         if (c.op === '+=') val = cur + val;
         else if (c.op === '-=') val = cur - val;
         else if (c.op === '*=') val = cur * val;
@@ -606,14 +645,14 @@
       if (info.dest) lines.push(h('div', {}, h('b', { textContent: '→ ' }), info.dest));
       const changes = [...out.res.values()].filter((r) => r.raw != null || !sameValue(r.old, r.new)); // drop "sets it to what it already is"
       for (const r of changes.slice(0, 30)) {
-        const m = r.maybe ? h('span', { className: 'maybe', textContent: ' (maybe)' }) : null;
+        const m = r.maybe ? h('span', { className: 'maybe', textContent: ` ${maybeText(r.why)}` }) : null;
         lines.push(r.raw != null
           ? h('div', {}, `${r.label}: `, h('span', { className: 'muted', textContent: 'changes (new value unknown)' }), m)
           : h('div', {}, `${r.label}: `, h('span', { className: 'old', textContent: plain(r.old) }), ' → ', h('span', { className: 'new', textContent: plain(r.new) }), m));
       }
       if (changes.length > 30) lines.push(h('div', { className: 'muted', textContent: `…and ${changes.length - 30} more` }));
       // Game code can't be read safely, so say so once in plain words instead of showing it.
-      for (const g of new Set(out.notes.filter((n) => n.goto).map((n) => n.goto + (n.maybe ? ' (maybe)' : '')))) lines.push(h('div', { textContent: `then goes to ${g}` }));
+      for (const g of new Set(out.notes.filter((n) => n.goto).map((n) => n.goto + (n.maybe ? ` ${maybeText([n.why])}` : '')))) lines.push(h('div', { textContent: `then goes to ${g}` }));
       if (out.notes.some((n) => n.code)) lines.push(h('div', { className: 'muted', textContent: 'Also runs game code, so it may change more than shown.' }));
       if (!changes.length && !out.notes.length) lines.push(h('div', { className: 'muted', textContent: 'No variable changes found.' }));
       this.tip.replaceChildren(...lines);
@@ -623,6 +662,13 @@
       this.tip.style.top = `${y + 18 + r.height > innerHeight ? Math.max(0, y - r.height - 8) : y + 18}px`;
     },
   };
+
+  // "(only if: …)" when every guess has a known reason, else "(maybe)".
+  function maybeText(why) {
+    const w = [...(why || [])];
+    if (!w.length || w.some((x) => !x)) return '(maybe)';
+    return w.length === 1 ? `(only if: ${w[0]})` : `(maybe: ${w.join('; ')})`;
+  }
 
   function linkAt(node) {
     for (let n = node; n && n.nodeType === 1 && n !== document.body; n = n.parentElement) {
@@ -716,6 +762,15 @@
   console.assert(evalCond('($a) && ($b)', { a: 1, b: 0 }, {}) === false && wrapped('(a || b)') && !wrapped('($a)-($b)') && !wrapped('(")")+(1)'), 'scc: brackets');
   console.assert(ev('<<if setup.f() && $q === 8>><<set $q to 9>><<elseif setup.f() && $q === 7>><<set $q to 8>><</if>>', { q: 8 }) === 'q=9?', 'scc: elseif checked against values before a maybe branch');
   console.assert(ev('<<if setup.f()>><<set $q to 2>><<elseif $q === 1>><<set $r to 1>><</if>>', { q: 1 }) === 'q=2?,r=1?', 'scc: elseif after maybe branch is maybe');
+  const why = (src, vars) => [...evalChanges(ec(src), vars, {}).res.values()].map((r) => `${r.label}:${maybeText(r.why)}`).join('|');
+  console.assert(why("<<if isDateBetween($gameDate,'20:00','21:59') && $q === 8>><<set $q to 9>><</if>>", { q: 8 }) === 'q:(only if: between 20:00 and 21:59)', 'scc: time window in words');
+  console.assert(why('<<if setup.f($a, "b") && $q === 8>><<set $q to 9>><<elseif setup.g()>><<set $r to 1>><<else>><<set $s to 1>><</if>>', { q: 8 })
+    === 'q:(only if: setup.f a, b)|r:(only if: not setup.f a, b and setup.g)|s:(only if: not setup.f a, b and not setup.g)', 'scc: elseif/else reasons');
+  console.assert(why('<<if setup.f() or setup.g()>><<set $a to 1>><<else>><<set $b to 1>><</if>>', {}) === 'a:(only if: setup.f or setup.g)|b:(only if: not (setup.f or setup.g))', 'scc: or reason');
+  console.assert(say('visited("Park")') === 'visited Park' && say('!visited("Park")') === 'not yet visited Park' && say('previous() is "Shop"') === 'coming from Shop'
+    && say('random(1, 10) lte 3') === 'random chance' && say('$hour gte 20') === 'hour gte 20' && say('not isNight()') === 'not isNight', 'scc: say');
+  console.assert(why('<<if setup.f() or setup.g()>><<if setup.h()>><<set $a to 1>><</if>><</if>>', {}) === 'a:(only if: (setup.f or setup.g) and setup.h)', 'scc: nested reasons bracketed');
+  console.assert(why('<<for _i to 0; _i lt 3; _i++>><<set $a to 1>><</for>>', {}) === 'a:(only if: inside a loop)', 'scc: loop reason');
   console.assert(ev('<<for _i to 0; _i lt 3; _i++>><<set $a to 1>><</for>>', {}) === 'a=1?', 'scc: loop stays maybe');
   console.assert(ev('<<link "x">><<if $q === 0>><<set $a to 1>><</if>><</link>><<set $b to 2>>', { q: 0 }) === 'b=2', 'scc: if inside skipped link');
   console.assert(ec('<<set $n++>>')[0].op === '++', 'scc: ++');
