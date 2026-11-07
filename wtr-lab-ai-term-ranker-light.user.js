@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.6.0
+// @version      1.6.1
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -879,7 +879,9 @@ ${refs}`;
       h('label', { class: 'wtrrank-field' }, 'Sync server URL'), syncUrlIn,
       h('label', { class: 'wtrrank-field' }, 'Sync token'), syncTokenIn,
       h('div', { class: 'wtrrank-muted' }, 'Sync settings stay on this device and apply after a page reload.'),
-      kv?.status ? h('div', { class: 'wtrrank-muted' }, syncStatusText(kv.status())) : '', // native append() would print "undefined"
+      h('div', { class: 'wtrrank-muted' }, kv ? syncStatusText(kv.status()) // why sync is off, so it can be fixed
+        : !syncUrl || !syncToken ? 'Sync off: no server URL or token saved on this device.'
+        : 'Sync off: the sync library (kvsync.js) did not load. Update the script in Violentmonkey while the server is on.'),
       h('div', { class: 'wtrrank-actions' },
         h('button', { class: 'wtrrank-action secondary', onclick: load }, 'Reload models'),
         h('button', {
