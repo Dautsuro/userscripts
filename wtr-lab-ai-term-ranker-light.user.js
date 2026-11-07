@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.6.2
+// @version      1.6.3
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -738,7 +738,14 @@ ${refs}`;
           : `Global, picked in ${counts.find(([t]) => t === global)?.[1] || 0} novels`;
     const data = { hash, source: hash };
     const input = h('input', { class: 'wtrrank-pop-input border border-border bg-card', value: term, autocomplete: 'off', 'aria-label': 'Term' });
-    const save = () => { const v = input.value.trim(); if (v) pickTerm(data, v); closePop(); };
+    const save = () => {
+      const v = input.value.trim();
+      // A hand fix (e.g. "Soul Masters" -> "Soul Master") also fixes the confident rendering. If novels
+      // disagree, provisionalPicks() ignores it anyway.
+      if (v && hash in confident) setConfident(hash, v);
+      if (v) pickTerm(data, v);
+      closePop();
+    };
     input.addEventListener('keydown', (e) => e.key === 'Enter' && save());
     const row = (label, ...value) => h('div', { class: 'flex items-baseline gap-2' },
       h('div', { class: 'min-w-14 px-1 font-semibold text-right text-xs shrink-0' }, label), h('div', { class: 'min-w-0 flex-1 break-words' }, ...value));
