@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SugarCube Cheat
 // @namespace    sugarcube-cheat
-// @version      1.0.1
+// @version      1.0.2
 // @description  Local SugarCube games: edit and freeze variables, see what a link will change, jump to any passage, change log, variable watcher, unlimited undo. Alt+C opens the panel.
 // @match        file:///*
 // @grant        GM_getValue
@@ -75,6 +75,11 @@
     if (s === undefined) s = String(v);
     return s.length > 80 ? `${s.slice(0, 77)}…` : s;
   }
+
+  // Short wording for the hover box: groups of values aren't spelled out.
+  const count = (n, one, many, empty) => (n ? `${many} ${n} ${n === 1 ? one : `${one}s`}` : empty);
+  const plain = (v) => (Array.isArray(v) ? count(v.length, 'item', 'list of', 'empty list')
+    : walkable(v) ? count(Object.keys(v).length, 'value', 'group of', 'empty group') : fmt(v));
 
   // ---------- reading <<set>> ----------
   // Split at top level, ignoring separators inside quotes and brackets.
@@ -166,8 +171,8 @@
   // Applies the changes to `vars` (a copy) in order and returns the result per variable.
   function evalChanges(changes, vars, temp, res = new Map(), notes = []) {
     for (const c of changes) {
-      if (c.code) { notes.push({ text: `runs code: ${c.code.slice(0, 60)}`, maybe: c.maybe }); continue; }
-      if (c.goto) { notes.push({ text: `jumps to: ${c.goto}`, maybe: c.maybe }); continue; }
+      if (c.code) { notes.push({ code: true }); continue; }
+      if (c.goto) { notes.push({ goto: c.goto, maybe: c.maybe }); continue; }
       const path = targetPath(c.target);
       const key = path ? pathKey(path) : c.target;
       const prev = res.get(key);
@@ -291,7 +296,7 @@
   function preview(info) {
     const vars = cloneVal(SC.State.variables), temp = cloneVal(SC.State.temporary || {});
     const out = evalChanges(extractChanges(info.src), vars, temp);
-    if (info.unknown) out.notes.push({ text: 'runs code (not readable)' });
+    if (info.unknown) out.notes.push({ code: true });
     if (info.dest && SC.Story.has(info.dest)) evalChanges(extractChanges(SC.Story.get(info.dest).text), vars, temp, out.res, out.notes);
     return out;
   }
@@ -487,18 +492,20 @@
     },
     showTip(info, x, y) {
       let out;
-      try { out = preview(info); } catch (err) { out = { res: new Map(), notes: [{ text: `preview failed: ${err.message}` }] }; }
+      try { out = preview(info); } catch { out = { res: new Map(), notes: [{ code: true }] }; }
       const lines = [];
       if (info.dest) lines.push(h('div', {}, h('b', { textContent: '→ ' }), info.dest));
       const changes = [...out.res.values()].filter((r) => r.raw != null || !sameValue(r.old, r.new)); // drop "sets it to what it already is"
       for (const r of changes.slice(0, 30)) {
         const m = r.maybe ? h('span', { className: 'maybe', textContent: ' (maybe)' }) : null;
         lines.push(r.raw != null
-          ? h('div', {}, h('span', { className: 'k', textContent: `${r.label} ` }), r.raw.length > 80 ? `${r.raw.slice(0, 77)}…` : r.raw, m)
-          : h('div', {}, `${r.label}: `, h('span', { className: 'old', textContent: fmt(r.old) }), ' → ', h('span', { className: 'new', textContent: fmt(r.new) }), m));
+          ? h('div', {}, `${r.label}: `, h('span', { className: 'muted', textContent: 'changes (new value unknown)' }), m)
+          : h('div', {}, `${r.label}: `, h('span', { className: 'old', textContent: plain(r.old) }), ' → ', h('span', { className: 'new', textContent: plain(r.new) }), m));
       }
       if (changes.length > 30) lines.push(h('div', { className: 'muted', textContent: `…and ${changes.length - 30} more` }));
-      for (const n of out.notes.slice(0, 10)) lines.push(h('div', { className: 'maybe', textContent: n.text + (n.maybe ? ' (maybe)' : '') }));
+      // Game code can't be read safely, so say so once in plain words instead of showing it.
+      for (const g of new Set(out.notes.filter((n) => n.goto).map((n) => n.goto + (n.maybe ? ' (maybe)' : '')))) lines.push(h('div', { textContent: `then goes to ${g}` }));
+      if (out.notes.some((n) => n.code)) lines.push(h('div', { className: 'muted', textContent: 'Also runs game code, so it may change more than shown.' }));
       if (!changes.length && !out.notes.length) lines.push(h('div', { className: 'muted', textContent: 'No variable changes found.' }));
       this.tip.replaceChildren(...lines);
       this.tip.hidden = false;
@@ -590,5 +597,6 @@
   console.assert(!safeRhs('`a ${setup.roll()}`') && !safeRhs('setup.f`x`'), 'scc: template literals unsafe');
   const sa = {}; setAt(sa, ['inv', '0'], 'x');
   console.assert(Array.isArray(sa.inv), 'scc: setAt makes arrays for numeric keys');
+  console.assert(plain([1, 2]) === 'list of 2 items' && plain({ a: 1 }) === 'group of 1 value' && plain(5) === '5' && plain([]) === 'empty list', 'scc: plain wording');
   console.assert(!safeRhs('setup.roll()') && !safeRhs('random(1, 6)') && !safeRhs('$b++') && !safeRhs('$c = 1'), 'scc: unsafe rhs');
 })();
