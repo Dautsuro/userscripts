@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR-LAB AI Term Ranker Light
 // @namespace    wtr-lab-ai-term-ranker-light
-// @version      1.7.0
+// @version      1.7.1
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -281,21 +281,27 @@ ${refs}`;
     return clone.textContent.replace(/\s+/g, ' ').trim().replace(/^\d+\+?\s+/, '');
   };
 
-  // Press AI Rank by itself once the tooltip has loaded its alternatives, or the AI gets a partial list:
-  // no loading spinner in the tooltip and the list unchanged for 400 ms (and not empty, unless 4 s passed:
-  // some terms have no alternatives). After 8 s it presses anyway.
+  // Press AI Rank by itself once the tooltip has loaded its alternatives, or the AI gets a partial list.
+  // Once a loading spinner was seen, its disappearance ends loading: press when neither the spinner
+  // nor the list changed for 150 ms (room for a final render), or 1 s if the list is still empty (the
+  // spinner may have flashed before the fetch; some terms have no alternatives). Without a spinner,
+  // wait for the list to stay unchanged for 400 ms and not be empty, unless 4 s passed.
+  // After 8 s it presses anyway.
   // Stops when the tooltip goes away or another tap replaced `token`.
   function pressWhenLoaded(btn, root, toLabel, token) {
     const box = btn.closest('[data-slot="popover-content"]') || root;
     const started = Date.now();
-    let last = null, since = 0;
+    let last = null, since = 0, sawSpinner = false;
     const tick = () => {
       if (!btn.isConnected || autoRank !== token) return;
       const list = tooltipChips(toLabel).map(chipText).join('\n'), now = Date.now();
       if (list !== last) { last = list; since = now; }
       const loading = box.querySelector('.animate-spin, [aria-busy="true"], [role="progressbar"]');
-      if ((!loading && now - since >= 400 && (list || now - started >= 4000)) || now - started >= 8000) { autoRank = null; btn.click(); }
-      else setTimeout(tick, 100);
+      if (loading) { sawSpinner = true; since = now; } // the quiet time starts when the spinner is gone
+      const quiet = now - since;
+      const loaded = !loading && (list ? quiet >= (sawSpinner ? 150 : 400) : sawSpinner ? quiet >= 1000 : quiet >= 400 && now - started >= 4000);
+      if (loaded || now - started >= 8000) { autoRank = null; btn.click(); }
+      else setTimeout(tick, 50);
     };
     tick();
   }
