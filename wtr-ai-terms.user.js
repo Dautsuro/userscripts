@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR AI Terms
 // @namespace    wtr-ai-terms
-// @version      1.8.1
+// @version      1.9.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -711,15 +711,22 @@ ${refs}`;
   GM_addStyle(`
     .wtrrank-btn { margin-top: 4px !important; white-space: nowrap; }
     .wtrrank-overlay { position: fixed; inset: 0; z-index: 2147483000; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 12px; box-sizing: border-box; }
-    .wtrrank-panel { background: #1f2125; color: #e6e6e6; border: 1px solid #3a3d42; border-radius: 10px; width: 100%; max-width: 480px; max-height: 90vh; display: flex; flex-direction: column; font: 14px/1.4 system-ui, sans-serif; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
-    .wtrrank-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #3a3d42; }
+    .wtrrank-panel { background: #1f2125; color: #e6e6e6; border: 1px solid #3a3d42; border-radius: 12px; width: 100%; max-width: 480px; max-height: 90vh; display: flex; flex-direction: column; font: 14px/1.4 system-ui, sans-serif; box-shadow: 0 8px 30px rgba(0,0,0,.5); outline: none; animation: wtrrank-open .18s ease-out; }
+    .wtrrank-head { display: flex; align-items: center; gap: 4px; padding: 4px 4px 4px 14px; border-bottom: 1px solid #3a3d42; }
     .wtrrank-head b { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .wtrrank-icon { background: none; border: 0; color: #bbb; font-size: 18px; cursor: pointer; padding: 4px 8px; min-width: 36px; min-height: 36px; }
-    .wtrrank-body { overflow-y: auto; padding: 8px 12px 12px; }
-    .wtrrank-row { padding: 8px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; margin-bottom: 6px; background: #26292e; }
-    .wtrrank-row:hover, .wtrrank-row:focus { border-color: #4a7bd0; outline: none; }
+    .wtrrank-icon { background: none; border: 0; border-radius: 8px; color: #bbb; font-size: 18px; cursor: pointer; padding: 0; min-width: 44px; min-height: 44px; }
+    .wtrrank-icon:active { background: #33363b; }
+    .wtrrank-body { overflow-y: auto; padding: 10px 12px 12px; }
+    .wtrrank-row { padding: 8px 10px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; margin-bottom: 6px; background: #26292e; transition: background-color .12s, border-color .12s; }
+    .wtrrank-row:active { background: #2e3238; }
+    .wtrrank-row.best { border-color: #2f6b45; background: #233029; }
     .wtrrank-top { display: flex; align-items: center; gap: 8px; }
-    .wtrrank-score { font-weight: 700; min-width: 44px; text-align: right; }
+    .wtrrank-score { font-weight: 700; min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; }
+    /* Score tiers: high = at least CONFIDENT_SCORE (the pick then applies provisionally elsewhere), low = barely in. */
+    .wtrrank-row.hi .wtrrank-score { color: #6fd08c; }
+    .wtrrank-row.hi .wtrrank-bar > div { background: #3fa863; }
+    .wtrrank-row.lo .wtrrank-score, .wtrrank-row.lo .wtrrank-term { color: #8f949c; }
+    .wtrrank-row.lo .wtrrank-bar > div { background: #5a606a; }
     .wtrrank-term { font-weight: 600; flex: 1; word-break: break-word; }
     .wtrrank-tag { font-size: 11px; background: #1e7e34; color: #fff; border-radius: 4px; padding: 1px 5px; }
     .wtrrank-tag.current { background: #2f6fde; }
@@ -731,12 +738,35 @@ ${refs}`;
     .wtrrank-reason { color: #aab; font-size: 12.5px; }
     .wtrrank-muted { color: #999; font-size: 12.5px; }
     .wtrrank-err { color: #f77; white-space: pre-wrap; word-break: break-word; }
+    .wtrrank-section { background: #26292e; border: 1px solid #33363b; border-radius: 10px; padding: 10px 12px 12px; margin-bottom: 10px; }
+    .wtrrank-section.danger { border-color: #5c2a27; }
+    .wtrrank-h { font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #9aa3b2; margin-bottom: 2px; }
+    .wtrrank-section.danger .wtrrank-h { color: #e0857f; }
     .wtrrank-field { display: block; margin: 10px 0 4px; font-size: 12.5px; color: #bbb; }
-    .wtrrank-input { width: 100%; box-sizing: border-box; background: #15171a; color: #eee; border: 1px solid #3a3d42; border-radius: 6px; padding: 8px; font-size: 14px; }
+    .wtrrank-field > .wtrrank-input { margin-top: 4px; }
+    .wtrrank-input { width: 100%; box-sizing: border-box; background: #15171a; color: #eee; border: 1px solid #3a3d42; border-radius: 6px; padding: 9px 8px; font-size: 14px; }
+    .wtrrank-input:focus { border-color: #4a7bd0; outline: none; }
     .wtrrank-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
-    .wtrrank-action { background: #2f6fde; color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; font-size: 14px; cursor: pointer; }
-    .wtrrank-action.secondary { background: #3a3d42; }
+    .wtrrank-action { background: #2f6fde; color: #fff; border: 0; border-radius: 8px; padding: 0 16px; min-height: 40px; font-size: 14px; font-weight: 600; cursor: pointer; }
+    .wtrrank-action:active { filter: brightness(.85); }
+    .wtrrank-action.secondary { background: #3a3d42; font-weight: 500; }
     .wtrrank-action.danger { background: #b3261e; }
+    .wtrrank-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 12px; border-top: 1px solid #3a3d42; }
+    .wtrrank-row:focus-visible, .wtrrank-action:focus-visible, .wtrrank-icon:focus-visible { outline: 2px solid #6f9bea; outline-offset: 1px; }
+    @media (hover: hover) { /* no sticky hover on touch screens */
+      .wtrrank-row:not(.wtrrank-ghost):hover { border-color: #4a7bd0; }
+      .wtrrank-icon:hover { background: #2b2e33; color: #eee; }
+      .wtrrank-action:hover { filter: brightness(1.12); }
+    }
+    /* Phone: bottom sheet, within thumb reach. */
+    @media (max-width: 600px) {
+      .wtrrank-overlay { align-items: flex-end; padding: 0; }
+      .wtrrank-panel { max-width: none; max-height: 88vh; border-radius: 16px 16px 0 0; border-bottom: 0; padding-bottom: env(safe-area-inset-bottom); animation-name: wtrrank-up; animation-duration: .22s; }
+      .wtrrank-foot .wtrrank-action { flex: 1; min-height: 44px; }
+    }
+    @keyframes wtrrank-open { from { opacity: 0; transform: scale(.97); } }
+    @keyframes wtrrank-up { from { transform: translateY(100%); } }
+    @media (prefers-reduced-motion: reduce) { .wtrrank-panel { animation: none !important; } }
     /* Our panel replaces WTR-LAB's tooltip while open. Opacity, not visibility: readTooltip() needs its innerText. */
     body:has(.wtrrank-overlay) [data-slot="popover-content"] { opacity: 0 !important; }
     .wtrrank-prog { height: 6px; background: #3a3d42; border-radius: 3px; overflow: hidden; margin: 4px 0 8px; }
@@ -744,7 +774,7 @@ ${refs}`;
     .wtrrank-prog > div { height: 100%; width: 0; transition: width 20s cubic-bezier(.08,.82,.17,1); background: repeating-linear-gradient(-45deg, #4a7bd0 0 6px, #6f9bea 6px 12px); background-size: 17px 100%; animation: wtrrank-stripe .5s linear infinite reverse; }
     .wtrrank-step { min-height: 1.4em; margin-bottom: 8px; }
     .wtrrank-step > span { display: inline-block; animation: wtrrank-fade .35s ease-out; }
-    .wtrrank-ghost, .wtrrank-ghost:hover { cursor: default; border-color: transparent; }
+    .wtrrank-ghost, .wtrrank-ghost:active { cursor: default; background: #26292e; }
     /* A glow sweeps each empty bar, row after row, like a scan down the list. */
     .wtrrank-ghost .wtrrank-bar > div { width: 100%; background: linear-gradient(90deg, transparent, #6f9bea, transparent) no-repeat; background-size: 40% 100%; animation: wtrrank-scan 1.6s ease-in-out infinite; }
     .wtrrank-skel { display: inline-block; height: 12px; border-radius: 4px; background: linear-gradient(90deg, #33363b 25%, #474b52 50%, #33363b 75%); background-size: 200% 100%; animation: wtrrank-shimmer 1.2s linear infinite; }
@@ -780,14 +810,21 @@ ${refs}`;
     document.querySelector('.wtrrank-overlay')?.remove();
     const body = h('div', { class: 'wtrrank-body' });
     const close = () => { overlay.remove(); if (onClose) onClose(); };
-    const overlay = h('div', { class: 'wtrrank-overlay', onclick: (e) => e.target === overlay && close() },
-      h('div', { class: 'wtrrank-panel', role: 'dialog', 'aria-label': title },
-        h('div', { class: 'wtrrank-head' },
-          h('b', {}, title),
-          onSettings && h('button', { class: 'wtrrank-icon', title: 'API settings', 'aria-label': 'API settings', onclick: () => body.settings() }, '⚙'),
-          h('button', { class: 'wtrrank-icon', title: 'Close', 'aria-label': 'Close', onclick: close }, '✕')),
-        body));
+    // Window capture: before the site's own Escape handling. Removes itself once the panel is gone, however it went.
+    const onKey = (e) => {
+      if (!overlay.isConnected) return removeEventListener('keydown', onKey, true);
+      if (e.key === 'Escape' && e.isTrusted) { e.stopPropagation(); close(); } // closeTooltip()'s own Escape passes through
+    };
+    addEventListener('keydown', onKey, true);
+    const panel = h('div', { class: 'wtrrank-panel', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
+      h('div', { class: 'wtrrank-head' },
+        h('b', {}, title),
+        onSettings && h('button', { type: 'button', class: 'wtrrank-icon', title: 'Settings', 'aria-label': 'Settings', onclick: () => body.settings() }, '⚙'),
+        h('button', { type: 'button', class: 'wtrrank-icon', title: 'Close', 'aria-label': 'Close', onclick: close }, '✕')),
+      body);
+    const overlay = h('div', { class: 'wtrrank-overlay', onclick: (e) => e.target === overlay && close() }, panel);
     body.settings = onSettings; // runRanking() swaps it when it takes over the loading panel
+    // No focus move into the panel: the hidden site tooltip may close on focus-out and end an auto rank.
     document.body.append(overlay);
     return body;
   }
@@ -826,7 +863,9 @@ ${refs}`;
 
   // ---------- term popover ----------
   // Replaces WTR-LAB's tooltip on picked terms. Classes are the site's own (Tailwind), so it follows its theme.
-  const SITE_BTN = 'inline-flex cursor-pointer shrink-0 items-center justify-center font-medium whitespace-nowrap transition-all select-none border border-border bg-card hover:bg-muted hover:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50 h-7 gap-1 rounded-[min(var(--radius-md),12px)] text-[0.8rem] px-2';
+  const SITE_BTN_BASE = 'inline-flex cursor-pointer shrink-0 items-center justify-center font-medium whitespace-nowrap transition-all select-none border h-7 gap-1 rounded-[min(var(--radius-md),12px)] text-[0.8rem] px-2';
+  const SITE_BTN = `${SITE_BTN_BASE} border-border bg-card hover:bg-muted hover:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50`;
+  const SITE_BTN_PRIMARY = `${SITE_BTN_BASE} border-transparent bg-primary text-primary-foreground hover:bg-primary/80`;
   let pop = null;
   const closePop = () => { pop?.remove(); pop = null; };
   document.addEventListener('pointerdown', (e) => { if (pop && !pop.contains(e.target)) closePop(); }, true);
@@ -862,7 +901,7 @@ ${refs}`;
       el.dataset.wtrrankOrig && row('WTR-LAB', h('span', { class: 'text-muted-foreground' }, el.dataset.wtrrankOrig)),
       others && row('Elsewhere', h('span', { class: 'text-muted-foreground' }, others)),
       h('div', { class: 'flex flex-wrap gap-2 justify-end' },
-        h('button', { type: 'button', class: SITE_BTN, onclick: save }, 'Save'),
+        h('button', { type: 'button', class: SITE_BTN_PRIMARY, onclick: save }, 'Save'),
         h('button', { type: 'button', class: SITE_BTN, onclick: () => viaSiteTooltip(el, true) }, '🏆 AI Rank'),
         // Without a local pick only "hide here" makes sense: the global rendering comes from other novels.
         h('button', { type: 'button', class: SITE_BTN, onclick: () => { pickTerm(data, local ? undefined : null); closePop(); } }, local ? 'Delete' : 'Not in this novel'),
@@ -921,7 +960,8 @@ ${refs}`;
         '⚠ Context trap: no single rendering fits every context. The term you pick becomes global, so it is never ranked again.') : '');
     const shown = list.some((x) => x.score > 0) ? list.filter((x) => x.score > 0) : list; // 0% rows hidden, unless all are 0%
     shown.forEach((x, i) => {
-      const row = h('div', { class: 'wtrrank-row', tabindex: '0', role: 'button' },
+      const tier = x.score >= CONFIDENT_SCORE ? ' hi' : x.score < 10 ? ' lo' : '';
+      const row = h('div', { class: `wtrrank-row${tier}${i === 0 && x.score >= 10 ? ' best' : ''}`, tabindex: '0', role: 'button' },
         h('div', { class: 'wtrrank-top' },
           h('span', { class: 'wtrrank-muted' }, `#${i + 1}`),
           h('span', { class: 'wtrrank-term' }, x.term),
@@ -929,7 +969,7 @@ ${refs}`;
           sameTerm(x.term, data.current) && h('span', { class: 'wtrrank-tag current', title: 'Currently selected in the text' }, 'CURRENT'),
           data.previous?.includes(x.term) && h('span', { class: 'wtrrank-tag previous', title: 'Picked in another novel' }, 'PREVIOUS'),
           x.term.toLowerCase() === popular && h('span', { class: 'wtrrank-tag popular', title: '99+ WTR-LAB votes: picking it makes it global' }, '99+'),
-          h('span', { class: 'wtrrank-score' }, `${x.score}%`)),
+          h('span', { class: 'wtrrank-score', ...(tier === ' hi' && { title: `≥${CONFIDENT_SCORE}%: picking it also applies it provisionally in other novels` }) }, `${x.score}%`)),
         h('div', { class: 'wtrrank-bar' }, h('div', { style: `width:${x.score}%` })),
         h('div', { class: 'wtrrank-reason' }, x.reason));
       // Use it in the text right away, then close the list and the term's tooltip.
@@ -970,7 +1010,7 @@ ${refs}`;
 
   function openConfig(after) {
     const cfg = getCfg();
-    const body = openPanel('WTR AI Terms — API settings');
+    const body = openPanel('WTR AI Terms settings');
     const keyIn = h('input', { class: 'wtrrank-input', type: 'password', autocomplete: 'off', placeholder: 'sk-ant-… / sk-… / sk-or-… / AIza… / gsk_… / xai-…' });
     keyIn.value = cfg.key;
     const status = h('div', { class: 'wtrrank-muted' });
@@ -985,6 +1025,7 @@ ${refs}`;
 
     async function load() {
       const p = detectProvider(keyIn.value), chosen = select.value;
+      status.className = 'wtrrank-muted'; // undo a Save error's red
       select.replaceChildren();
       if (!p) { status.textContent = keyIn.value ? 'Unrecognized key format.' : ''; return; }
       let want = manual.value.trim() || chosen; // Reload models keeps what was chosen
@@ -1007,37 +1048,48 @@ ${refs}`;
     select.addEventListener('change', () => { if (select.value) manual.value = ''; });
     keyIn.addEventListener('change', load);
 
+    // Wrapping label: tapping its text focuses the field.
+    const field = (label, input) => h('label', { class: 'wtrrank-field' }, label, input);
+    const section = (title, cls, ...kids) => h('div', { class: `wtrrank-section ${cls}` }, h('div', { class: 'wtrrank-h' }, title), ...kids);
+    // Errors show in the AI section, which may be scrolled away when Save is pressed.
+    const fail = (msg) => { status.className = 'wtrrank-err'; status.textContent = msg; status.scrollIntoView({ block: 'nearest' }); };
     body.append(
-      h('label', { class: 'wtrrank-field' }, 'API key'), keyIn, status,
-      h('label', { class: 'wtrrank-field' }, 'Model'), select,
-      h('label', { class: 'wtrrank-field' }, 'Or type a model name'), manual,
-      h('label', { class: 'wtrrank-field' }, 'Sync server URL'), syncUrlIn,
-      h('label', { class: 'wtrrank-field' }, 'Sync token'), syncTokenIn,
-      h('div', { class: 'wtrrank-muted' }, 'Sync settings stay on this device and apply after a page reload.'),
-      h('div', { class: 'wtrrank-muted' }, kv ? syncStatusText(kv.status()) // why sync is off, so it can be fixed
-        : !syncUrl || !syncToken ? 'Sync off: no server URL or token saved on this device.'
-        : 'Sync off: the sync library (kvsync.js) did not load. Update the script in Violentmonkey while the server is on.'),
-      h('div', { class: 'wtrrank-actions' },
-        h('button', { class: 'wtrrank-action secondary', onclick: load }, 'Reload models'),
-        h('button', {
-          class: 'wtrrank-action',
-          onclick: () => {
-            const model = manual.value.trim() || select.value, p = detectProvider(keyIn.value);
-            if (!p) return (status.textContent = 'Unrecognized key format.');
-            if (!model) return (status.textContent = 'Choose or type a model.');
-            GM_setValue('apiKey', keyIn.value.trim());
-            if (model !== savedModel(p.id)) kvPut(['model', p.id], model);
-            GM_setValue(`model:${p.id}`, model);
-            if (syncUrlIn.value.trim() !== GM_getValue('syncUrl', '')) GM_setValue('syncResync', true);
-            GM_setValue('syncUrl', syncUrlIn.value.trim());
-            GM_setValue('syncToken', syncTokenIn.value.trim());
-            document.querySelector('.wtrrank-overlay')?.remove();
-            if (after) after();
-          },
-        }, 'Save')),
-      h('div', { class: 'wtrrank-actions', style: 'justify-content:flex-start;border-top:1px solid #3a3d42;padding-top:12px' },
-        h('button', { class: 'wtrrank-action danger', onclick: resetData }, 'Reset saved data')),
-      h('div', { class: 'wtrrank-muted' }, 'Deletes every checked and picked term in all novels, on every synced device too. Keeps the API key, model and sync settings.'));
+      section('AI model', '',
+        field('API key', keyIn), status,
+        field('Model', select),
+        field('Or type a model name', manual),
+        h('div', { class: 'wtrrank-actions', style: 'justify-content:flex-start' },
+          h('button', { type: 'button', class: 'wtrrank-action secondary', onclick: load }, 'Reload models'))),
+      section('Sync', '',
+        field('Sync server URL', syncUrlIn),
+        field('Sync token', syncTokenIn),
+        h('div', { class: 'wtrrank-muted', style: 'margin-top:8px' }, 'Stays on this device and applies after a page reload.'),
+        h('div', { class: 'wtrrank-muted' }, kv ? syncStatusText(kv.status()) // why sync is off, so it can be fixed
+          : !syncUrl || !syncToken ? 'Sync off: no server URL or token saved on this device.'
+          : 'Sync off: the sync library (kvsync.js) did not load. Update the script in Violentmonkey while the server is on.')),
+      section('Danger zone', 'danger',
+        h('div', { class: 'wtrrank-muted', style: 'margin-top:6px' }, 'Deletes every checked and picked term in all novels, on every synced device too. Keeps the API key, model and sync settings.'),
+        h('div', { class: 'wtrrank-actions', style: 'justify-content:flex-start' },
+          h('button', { type: 'button', class: 'wtrrank-action danger', onclick: resetData }, 'Reset saved data'))));
+    // Outside the scrolling body, so Save is always in reach.
+    body.after(h('div', { class: 'wtrrank-foot' },
+      h('button', {
+        type: 'button',
+        class: 'wtrrank-action',
+        onclick: () => {
+          const model = manual.value.trim() || select.value, p = detectProvider(keyIn.value);
+          if (!p) return fail('Unrecognized key format.');
+          if (!model) return fail('Choose or type a model.');
+          GM_setValue('apiKey', keyIn.value.trim());
+          if (model !== savedModel(p.id)) kvPut(['model', p.id], model);
+          GM_setValue(`model:${p.id}`, model);
+          if (syncUrlIn.value.trim() !== GM_getValue('syncUrl', '')) GM_setValue('syncResync', true);
+          GM_setValue('syncUrl', syncUrlIn.value.trim());
+          GM_setValue('syncToken', syncTokenIn.value.trim());
+          document.querySelector('.wtrrank-overlay')?.remove();
+          if (after) after();
+        },
+      }, 'Save')));
     if (cfg.key) load();
   }
 
