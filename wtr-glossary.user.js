@@ -7,7 +7,6 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
-// @grant        GM_addValueChangeListener
 // @grant        GM_registerMenuCommand
 // @connect      100.125.40.99
 // @require      http://100.125.40.99:8090/kvsync.js
@@ -30,6 +29,15 @@
     const f = term.filter;
     const filter = Array.isArray(f) ? f : f && f.serie_id != null ? [f.serie_id] : [];
     return [id, term.to, term.from, !!term.case, filter, term.source ?? null, term.source_id ?? null, term.source_hash ?? term.from];
+  }
+  // Requests the script answers itself: every non-GET on the term routes, even with an unreadable body.
+  const isTermWrite = (method, path) => method !== 'GET' && /^\/api\/v2\/user\/config\/(term|terms)(\/|$)/.test(path);
+  // A synced row, if it is one of ours and well-formed; anyone with admin access can edit rows.
+  function remoteTerm(key, value) {
+    let k;
+    try { k = JSON.parse(key); } catch (_) { return null; }
+    if (!Array.isArray(k) || k[0] !== 'term' || !validTerm(value) || value[0] !== k[1] || typeof value[3] !== 'boolean') return null;
+    return value;
   }
   const newId = () => 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -57,18 +65,41 @@
 
   function browser() {
     // ---------- storage ----------
-    let terms = GM_getValue('terms', {});
+    // No long-lived copy: every change re-reads GM storage, so another tab's newer write is never
+    // overwritten. Changes made in the same tick (a sync pull of many terms) are saved once.
+    let pending = null;
+    const current = () => pending || GM_getValue('terms', {});
     // The reader reads user_terms_v2 when it mounts, before any request: keep it equal to our list.
-    const mirror = () => localStorage.setItem('user_terms_v2', JSON.stringify(list(terms)));
-    const save = () => { GM_setValue('terms', terms); mirror(); };
-    mirror();
-    // Another tab saved: take its map, or this tab's next write would drop that tab's terms.
-    GM_addValueChangeListener('terms', (k, o, n, remote) => { if (remote) { terms = n || {}; mirror(); } });
+    const mirror = (terms) => localStorage.setItem('user_terms_v2', JSON.stringify(list(terms)));
+    function edit(fn) {
+      if (!pending) {
+        pending = GM_getValue('terms', {});
+        setTimeout(() => { GM_setValue('terms', pending); mirror(pending); pending = null; });
+      }
+      fn(pending);
+    }
+    mirror(current());
 
     // ---------- sync (optional, see CLAUDE.md) ----------
     const syncUrl = GM_getValue('syncUrl', ''), syncToken = GM_getValue('syncToken', '');
+    // KvSync re-reads and re-saves its whole state on every set(); inside kvBatched() that state is
+    // held in memory and written once, so bulk loops (import, bootstrap) stay linear.
+    const KV_STATE = 'kvsync:wtr-glossary';
+    let kvBatch = null;
+    const kvStorage = {
+      get: (k, d) => (kvBatch && k === KV_STATE ? kvBatch.state : GM_getValue(k, d)),
+      set: (k, v) => { if (kvBatch && k === KV_STATE) kvBatch.state = v; else GM_setValue(k, v); },
+    };
+    function kvBatched(fn) {
+      kvBatch = { state: GM_getValue(KV_STATE, null) };
+      try { fn(); } finally {
+        const { state } = kvBatch;
+        kvBatch = null;
+        if (state) GM_setValue(KV_STATE, state);
+      }
+    }
     const kv = syncUrl && syncToken && typeof KvSync !== 'undefined'
-      ? KvSync.create({ app: 'wtr-glossary', url: syncUrl, token: syncToken }) : null;
+      ? KvSync.create({ app: 'wtr-glossary', url: syncUrl, token: syncToken, storage: kvStorage }) : null;
     const kvKey = (id) => { const k = JSON.stringify(['term', id]); return k.length <= 2000 ? k : null; };
     function kvPut(id, t, clientUpdated) {
       const k = kv && kvKey(id);
@@ -77,14 +108,18 @@
     }
     let firstSync = null;
     if (kv) {
+      // First run with sync (also when sync is turned on later): offer every local term at timestamp 1,
+      // so real edits on any device win over this old data.
+      if (!GM_getValue('syncBootstrapped', false)) {
+        kvBatched(() => { for (const [id, t] of Object.entries(current())) kvPut(id, t, 1); });
+        GM_setValue('syncBootstrapped', true);
+      }
       kv.onChange((key, value, deleted) => {
         let id;
         try { [, id] = JSON.parse(key); } catch (_) { return; }
-        if (typeof id !== 'string') return;
-        if (deleted) { if (!(id in terms)) return; terms = { ...terms }; delete terms[id]; }
-        else if (validTerm(value) && value[0] === id) terms = { ...terms, [id]: value };
-        else return; // anyone with admin access can edit rows: ignore what does not fit
-        save();
+        if (deleted) { if (typeof id === 'string') edit((t) => { delete t[id]; }); return; }
+        const term = remoteTerm(key, value);
+        if (term) edit((t) => { t[id] = term; });
       });
       kv.start();
       if (GM_getValue('syncResync', false)) { GM_setValue('syncResync', false); kv.resync(); }
@@ -99,21 +134,24 @@
     window.fetch = async function (input, init) {
       let url, method;
       try {
-        url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, location.href);
-        method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+        const isReq = input && typeof input === 'object' && !(input instanceof URL); // a Request, maybe from another frame
+        url = new URL(isReq ? input.url : input, location.href);
+        method = String(init?.method || (isReq ? input.method : 'GET')).toUpperCase();
       } catch (_) { return realFetch.apply(this, arguments); }
       if (url.origin !== location.origin) return realFetch.apply(this, arguments);
-      if (url.pathname.startsWith(API) && method !== 'GET') {
+      if (isTermWrite(method, url.pathname)) {
         // A term write never reaches WTR-LAB, even when its body is unreadable.
         let body = null;
         try { body = JSON.parse(typeof init?.body === 'string' ? init.body : await input.clone().text()); } catch (_) { /* no body */ }
-        const r = handle(method, url.pathname, body, terms);
-        if (r) {
-          terms = r.terms;
-          save();
-          for (const [id, t] of r.changed) kvPut(id, t);
-        }
-        return json({ success: true, config: { terms: list(terms) } });
+        let changed = [];
+        edit((t) => {
+          const r = handle(method, url.pathname, body, t);
+          if (!r) return;
+          for (const [id, term] of r.changed) { if (term) t[id] = term; else delete t[id]; }
+          changed = r.changed;
+        });
+        for (const [id, term] of changed) kvPut(id, term);
+        return json({ success: true, config: { terms: list(current()) } });
       }
       if (url.pathname === '/api/v2/user/config' && method === 'GET') {
         const res = await realFetch.apply(this, arguments);
@@ -122,7 +160,7 @@
         if (!data?.success || !data.config) return res;
         if (!GM_getValue('imported', false)) importTerms(data.config.terms);
         if (firstSync) await Promise.race([firstSync, new Promise((ok) => setTimeout(ok, 2000))]);
-        data.config.terms = list(terms);
+        data.config.terms = list(current());
         return json(data);
       }
       return realFetch.apply(this, arguments);
@@ -130,15 +168,16 @@
 
     // First run on this device: copy the account's WTR-LAB terms in, at timestamp 1 so real edits win.
     function importTerms(server) {
-      const next = { ...terms };
-      for (const raw of Array.isArray(server) ? server : []) {
-        const t = Array.isArray(raw) ? [String(raw[0]), ...raw.slice(1)] : null;
-        if (!validTerm(t) || t[0] in next) continue;
-        next[t[0]] = t;
-        kvPut(t[0], t, 1);
-      }
-      terms = next;
-      save();
+      const added = [];
+      edit((terms) => {
+        for (const raw of Array.isArray(server) ? server : []) {
+          const t = Array.isArray(raw) ? [String(raw[0]), ...raw.slice(1)] : null;
+          if (!validTerm(t) || t[0] in terms) continue;
+          terms[t[0]] = t;
+          added.push(t);
+        }
+      });
+      kvBatched(() => { for (const t of added) kvPut(t[0], t, 1); });
       GM_setValue('imported', true);
     }
 
@@ -147,7 +186,8 @@
       document.getElementById('wtrg-settings')?.remove();
       const el = (tag, props, ...kids) => { const n = Object.assign(document.createElement(tag), props); n.append(...kids); return n; };
       const url = el('input', { value: syncUrl, placeholder: 'http://100.x.y.z:8090 (empty = no sync)' });
-      const token = el('input', { value: syncToken, type: 'password', autocomplete: 'off', placeholder: "This device's token" });
+      // The page's own scripts can read this DOM, so the saved token is never put back into it.
+      const token = el('input', { type: 'password', autocomplete: 'off', placeholder: syncToken ? 'Saved (leave empty to keep it)' : "This device's token" });
       const st = kv?.status();
       const status = !kv ? (syncUrl && syncToken ? 'Sync is off: the sync library did not load (server unreachable at install).' : 'Sync is off.')
         : `Last sync: ${st.lastOkAt ? new Date(st.lastOkAt).toLocaleString() : 'not yet'}${st.lastError ? ` · error: ${st.lastError}` : ''}`;
@@ -161,11 +201,11 @@
           e.preventDefault();
           if (url.value.trim() !== syncUrl) GM_setValue('syncResync', true); // a new server has none of our terms
           GM_setValue('syncUrl', url.value.trim());
-          GM_setValue('syncToken', token.value.trim());
+          if (token.value.trim() || !url.value.trim()) GM_setValue('syncToken', token.value.trim());
           location.reload(); // KvSync is created at load
         } },
         el('b', { textContent: 'WTR Glossary settings' }),
-        el('div', { textContent: `${list(terms).length} terms in your glossary.` }),
+        el('div', { textContent: `${list(current()).length} terms in your glossary.` }),
         el('label', { textContent: 'Sync server URL' }), url,
         el('label', { textContent: 'Sync token' }), token,
         el('div', { textContent: status, style: 'color:#9aa0a6' }),
@@ -197,6 +237,13 @@
     console.assert(Object.keys(r.terms).join() === 'b' && r.changed.length === 2, 'bulk delete');
     console.assert(three.a, 'input not mutated');
     console.assert(handle('GET', '/api/v2/user/config', null, {}) === null, 'config read not owned');
+    console.assert(isTermWrite('POST', '/api/v2/user/config/term') && isTermWrite('DELETE', '/api/v2/user/config/term/x')
+      && isTermWrite('POST', '/api/v2/user/config/terms/delete') && isTermWrite('PATCH', '/api/v2/user/config/terms/other'), 'term writes owned');
+    console.assert(!isTermWrite('POST', '/api/v2/user/config/folders') && !isTermWrite('GET', '/api/v2/user/config/term/x')
+      && !isTermWrite('POST', '/api/v2/user/config'), 'other config writes pass through');
+    const good = ['i', 'b', 'a', false, []];
+    console.assert(remoteTerm('["term","i"]', good) === good && remoteTerm('["other","i"]', good) === null
+      && remoteTerm('["term","j"]', good) === null && remoteTerm('nope', good) === null && remoteTerm('["term","i"]', ['i', 'b', 'a', 'x', []]) === null, 'remoteTerm');
     console.assert(handle('GET', '/api/v2/term-preferences?source_id=1', null, {}) === null, 'prefs not owned');
     console.assert(toStored('i', T('a', 'b', { serie_id: 5 }))[4][0] === 5 && toStored('i', T('a', 'b'))[4].length === 0, 'filter forms');
     console.assert(validTerm(['i', 'b', 'a', false, []]) && !validTerm(null) && !validTerm(['x']) && !validTerm([1, 'a', 'b'])
