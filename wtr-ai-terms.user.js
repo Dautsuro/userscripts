@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR AI Terms
 // @namespace    wtr-ai-terms
-// @version      1.9.0
+// @version      1.9.1
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -769,20 +769,28 @@ ${refs}`;
     @media (prefers-reduced-motion: reduce) { .wtrrank-panel { animation: none !important; } }
     /* Our panel replaces WTR-LAB's tooltip while open. Opacity, not visibility: readTooltip() needs its innerText. */
     body:has(.wtrrank-overlay) [data-slot="popover-content"] { opacity: 0 !important; }
-    .wtrrank-prog { height: 6px; background: #3a3d42; border-radius: 3px; overflow: hidden; margin: 4px 0 8px; }
-    /* Fast start, then slower and slower toward 92%; stripes run backwards, which makes the wait feel shorter. */
-    .wtrrank-prog > div { height: 100%; width: 0; transition: width 20s cubic-bezier(.08,.82,.17,1); background: repeating-linear-gradient(-45deg, #4a7bd0 0 6px, #6f9bea 6px 12px); background-size: 17px 100%; animation: wtrrank-stripe .5s linear infinite reverse; }
-    .wtrrank-step { min-height: 1.4em; margin-bottom: 8px; }
+    .wtrrank-prog { height: 4px; background: #33363b; border-radius: 2px; overflow: hidden; margin: 2px 0 10px; }
+    /* Fast start, then slower and slower toward 92%; a light sheen keeps running over it so it never looks stuck. */
+    .wtrrank-prog > div { position: relative; overflow: hidden; height: 100%; width: 0; border-radius: 2px; transition: width 20s cubic-bezier(.08,.82,.17,1); background: linear-gradient(90deg, #2f6fde, #6f9bea); }
+    .wtrrank-prog > div::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.5), transparent); transform: translateX(-100%); animation: wtrrank-sheen 1.4s ease-in-out infinite; }
+    /* Step line with a pulsing dot: the "AI is working" signal. */
+    .wtrrank-step { display: flex; align-items: center; gap: 8px; min-height: 1.4em; margin-bottom: 10px; }
+    .wtrrank-step::before { content: ''; flex: none; width: 7px; height: 7px; border-radius: 50%; background: #6f9bea; box-shadow: 0 0 0 0 rgba(111,155,234,.6); animation: wtrrank-pulse 1.2s ease-out infinite; }
     .wtrrank-step > span { display: inline-block; animation: wtrrank-fade .35s ease-out; }
+    /* Ghost rows have the same layout as result rows, so nothing jumps when the results replace them. */
     .wtrrank-ghost, .wtrrank-ghost:active { cursor: default; background: #26292e; }
+    .wtrrank-ghost { animation: wtrrank-fade .3s ease-out backwards; }
+    .wtrrank-ghost .wtrrank-term { color: #b5bac2; }
     /* A glow sweeps each empty bar, row after row, like a scan down the list. */
     .wtrrank-ghost .wtrrank-bar > div { width: 100%; background: linear-gradient(90deg, transparent, #6f9bea, transparent) no-repeat; background-size: 40% 100%; animation: wtrrank-scan 1.6s ease-in-out infinite; }
     .wtrrank-skel { display: inline-block; height: 12px; border-radius: 4px; background: linear-gradient(90deg, #33363b 25%, #474b52 50%, #33363b 75%); background-size: 200% 100%; animation: wtrrank-shimmer 1.2s linear infinite; }
-    @keyframes wtrrank-stripe { to { background-position: 17px 0; } }
+    .wtrrank-row.in { animation: wtrrank-fade .25s ease-out backwards; } /* results arrive one after another */
     @keyframes wtrrank-fade { from { opacity: 0; transform: translateY(4px); } }
+    @keyframes wtrrank-sheen { to { transform: translateX(100%); } }
+    @keyframes wtrrank-pulse { 70% { box-shadow: 0 0 0 6px rgba(111,155,234,0); } to { box-shadow: 0 0 0 0 rgba(111,155,234,0); } }
     @keyframes wtrrank-scan { from { background-position: -70% 0; } to { background-position: 170% 0; } }
     @keyframes wtrrank-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
-    @media (prefers-reduced-motion: reduce) { .wtrrank-load * { animation: none !important; transition: none !important; } }
+    @media (prefers-reduced-motion: reduce) { .wtrrank-load *, .wtrrank-load *::before, .wtrrank-load *::after, .wtrrank-row.in { animation: none !important; transition: none !important; } }
     .wtrrank-pop { position: absolute; z-index: 2147482000; box-sizing: border-box; max-width: calc(100vw - 16px); }
     .wtrrank-pop-input { width: 100%; box-sizing: border-box; border-radius: 6px; padding: 4px 6px; font: inherit; color: inherit; }
   `);
@@ -850,9 +858,13 @@ ${refs}`;
       : ["Loading WTR-LAB's suggestions…"];
     box.step = 0;
     say();
-    box.lastChild.replaceChildren(...(candidates.length ? candidates : [0, 1, 2]).map((t, i) => h('div', { class: 'wtrrank-row wtrrank-ghost' },
-      h('div', { class: 'wtrrank-top' }, typeof t === 'string' ? h('span', { class: 'wtrrank-term' }, t) : h('span', { class: 'wtrrank-skel', style: `width:${[45, 30, 55][i]}%` })),
-      h('div', { class: 'wtrrank-bar' }, h('div', { style: `animation-delay:${i * 0.15}s` })))));
+    // Same parts as a result row (term, score, bar, reason) with skeletons for what is not known yet.
+    box.lastChild.replaceChildren(...(candidates.length ? candidates : [0, 1, 2]).map((t, i) => h('div', { class: 'wtrrank-row wtrrank-ghost', style: `animation-delay:${i * 60}ms` },
+      h('div', { class: 'wtrrank-top' },
+        typeof t === 'string' ? h('span', { class: 'wtrrank-term' }, t) : h('span', { class: 'wtrrank-skel', style: `width:${[45, 30, 55][i]}%` }),
+        h('span', { class: 'wtrrank-skel', style: 'width:34px;margin-left:auto' })),
+      h('div', { class: 'wtrrank-bar' }, h('div', { style: `animation-delay:${i * 0.15}s` })),
+      h('div', { class: 'wtrrank-reason' }, h('span', { class: 'wtrrank-skel', style: `width:${[70, 55, 62][i % 3]}%;height:10px` })))));
   }
 
   const sameTerm = (a, b) => !!a && !!b && a.trim() === b.trim(); // case-sensitive: "pill" and "Pill" are different terms
@@ -961,7 +973,7 @@ ${refs}`;
     const shown = list.some((x) => x.score > 0) ? list.filter((x) => x.score > 0) : list; // 0% rows hidden, unless all are 0%
     shown.forEach((x, i) => {
       const tier = x.score >= CONFIDENT_SCORE ? ' hi' : x.score < 10 ? ' lo' : '';
-      const row = h('div', { class: `wtrrank-row${tier}${i === 0 && x.score >= 10 ? ' best' : ''}`, tabindex: '0', role: 'button' },
+      const row = h('div', { class: `wtrrank-row${tier}${i === 0 && x.score >= 10 ? ' best' : ''} in`, style: `animation-delay:${Math.min(i, 8) * 50}ms`, tabindex: '0', role: 'button' },
         h('div', { class: 'wtrrank-top' },
           h('span', { class: 'wtrrank-muted' }, `#${i + 1}`),
           h('span', { class: 'wtrrank-term' }, x.term),
