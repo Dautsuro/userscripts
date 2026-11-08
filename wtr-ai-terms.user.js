@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR AI Terms
 // @namespace    wtr-ai-terms
-// @version      1.8.0
+// @version      1.8.1
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -745,11 +745,12 @@ ${refs}`;
     .wtrrank-step { min-height: 1.4em; margin-bottom: 8px; }
     .wtrrank-step > span { display: inline-block; animation: wtrrank-fade .35s ease-out; }
     .wtrrank-ghost, .wtrrank-ghost:hover { cursor: default; border-color: transparent; }
-    .wtrrank-ghost .wtrrank-bar > div { animation: wtrrank-weigh 1.4s ease-in-out infinite alternate; }
+    /* A glow sweeps each empty bar, row after row, like a scan down the list. */
+    .wtrrank-ghost .wtrrank-bar > div { width: 100%; background: linear-gradient(90deg, transparent, #6f9bea, transparent) no-repeat; background-size: 40% 100%; animation: wtrrank-scan 1.6s ease-in-out infinite; }
     .wtrrank-skel { display: inline-block; height: 12px; border-radius: 4px; background: linear-gradient(90deg, #33363b 25%, #474b52 50%, #33363b 75%); background-size: 200% 100%; animation: wtrrank-shimmer 1.2s linear infinite; }
     @keyframes wtrrank-stripe { to { background-position: 17px 0; } }
     @keyframes wtrrank-fade { from { opacity: 0; transform: translateY(4px); } }
-    @keyframes wtrrank-weigh { from { width: 12%; } to { width: 88%; } }
+    @keyframes wtrrank-scan { from { background-position: -70% 0; } to { background-position: 170% 0; } }
     @keyframes wtrrank-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
     @media (prefers-reduced-motion: reduce) { .wtrrank-load * { animation: none !important; transition: none !important; } }
     .wtrrank-pop { position: absolute; z-index: 2147482000; box-sizing: border-box; max-width: calc(100vw - 16px); }
@@ -814,7 +815,7 @@ ${refs}`;
     say();
     box.lastChild.replaceChildren(...(candidates.length ? candidates : [0, 1, 2]).map((t, i) => h('div', { class: 'wtrrank-row wtrrank-ghost' },
       h('div', { class: 'wtrrank-top' }, typeof t === 'string' ? h('span', { class: 'wtrrank-term' }, t) : h('span', { class: 'wtrrank-skel', style: `width:${[45, 30, 55][i]}%` })),
-      h('div', { class: 'wtrrank-bar' }, h('div', { style: `animation-duration:${1.1 + (i * 0.37) % 0.9}s;animation-delay:-${(i * 0.53) % 1.4}s` })))));
+      h('div', { class: 'wtrrank-bar' }, h('div', { style: `animation-delay:${i * 0.15}s` })))));
   }
 
   const sameTerm = (a, b) => !!a && !!b && a.trim() === b.trim(); // case-sensitive: "pill" and "Pill" are different terms
