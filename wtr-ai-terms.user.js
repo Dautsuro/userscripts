@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR AI Terms
 // @namespace    wtr-ai-terms
-// @version      1.7.3
+// @version      1.8.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -233,7 +233,7 @@ ${refs}`;
   // ---------- page integration ----------
   let lastClicked = null;
   let bypassOnce = false; // let the next tap on a picked term reach WTR-LAB's own tooltip
-  let autoRank = null; // { until }: a term to rank by itself was just tapped; scan() presses AI Rank in its tooltip
+  let autoRank = null; // { until, body, seen }: a term to rank by itself was just tapped; scan() presses AI Rank in its tooltip
   document.addEventListener('click', (e) => {
     if (!(e.target.closest && e.target.closest('.chapter-body'))) return;
     lastClicked = e.target;
@@ -244,7 +244,7 @@ ${refs}`;
     if (el.dataset.hash in localTerms()) {
       e.preventDefault(); e.stopPropagation();
       openTermPopover(el);
-    } else if (!checkedHashes().has(el.dataset.hash)) autoRank = { until: Date.now() + 5000 }; // still term-colored
+    } else if (!checkedHashes().has(el.dataset.hash)) startAutoRank(el); // still term-colored
   }, true);
 
   // Term elements showing the selected translation are replaced by ⟦source⟧ so the AI never sees the current choice.
@@ -288,7 +288,7 @@ ${refs}`;
   // wait for the list to stay unchanged for 400 ms and not be empty, unless 4 s passed.
   // After 8 s it presses anyway.
   // Stops when the tooltip goes away or another tap replaced `token`.
-  function pressWhenLoaded(btn, root, toLabel, token) {
+  function pressWhenLoaded(btn, root, toLabel, token, rank) {
     const box = btn.closest('[data-slot="popover-content"]') || root;
     const started = Date.now();
     let last = null, since = 0, sawSpinner = false;
@@ -300,7 +300,7 @@ ${refs}`;
       if (loading) { sawSpinner = true; since = now; } // the quiet time starts when the spinner is gone
       const quiet = now - since;
       const loaded = !loading && (list ? quiet >= (sawSpinner ? 150 : 400) : sawSpinner ? quiet >= 1000 : quiet >= 400 && now - started >= 4000);
-      if (loaded || now - started >= 8000) { autoRank = null; btn.click(); }
+      if (loaded || now - started >= 8000) { autoRank = null; rank(token.body); }
       else setTimeout(tick, 50);
     };
     tick();
@@ -338,15 +338,16 @@ ${refs}`;
       ours.className = btn.className;
       ours.classList.add('wtrrank-btn');
       ours.textContent = '🏆 AI Rank';
+      const rank = (body) => runRanking(readTooltip(root, toLabel), body);
       ours.addEventListener('click', (e) => {
         e.preventDefault(); e.stopPropagation();
         autoRank = null; // a manual tap must not be followed by a second, automatic one
-        runRanking(readTooltip(root, toLabel));
+        rank();
       });
       btn.after(ours);
       // Only a button added after the tap counts: a closing tooltip of the previous term already had its own.
       // If the tooltip re-renders while loading, its new button takes over; the first press ends it.
-      if (autoRank && Date.now() < autoRank.until) pressWhenLoaded(ours, root, toLabel, autoRank);
+      if (autoRank && Date.now() < autoRank.until) { autoRank.seen = true; pressWhenLoaded(ours, root, toLabel, autoRank, rank); }
     }
 
     // Term editor: "Clear" button next to the Replacement Text label (deleting text is tedious on mobile).
@@ -736,6 +737,21 @@ ${refs}`;
     .wtrrank-action { background: #2f6fde; color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; font-size: 14px; cursor: pointer; }
     .wtrrank-action.secondary { background: #3a3d42; }
     .wtrrank-action.danger { background: #b3261e; }
+    /* Our panel replaces WTR-LAB's tooltip while open. Opacity, not visibility: readTooltip() needs its innerText. */
+    body:has(.wtrrank-overlay) [data-slot="popover-content"] { opacity: 0 !important; }
+    .wtrrank-prog { height: 6px; background: #3a3d42; border-radius: 3px; overflow: hidden; margin: 4px 0 8px; }
+    /* Fast start, then slower and slower toward 92%; stripes run backwards, which makes the wait feel shorter. */
+    .wtrrank-prog > div { height: 100%; width: 0; transition: width 20s cubic-bezier(.08,.82,.17,1); background: repeating-linear-gradient(-45deg, #4a7bd0 0 6px, #6f9bea 6px 12px); background-size: 17px 100%; animation: wtrrank-stripe .5s linear infinite reverse; }
+    .wtrrank-step { min-height: 1.4em; margin-bottom: 8px; }
+    .wtrrank-step > span { display: inline-block; animation: wtrrank-fade .35s ease-out; }
+    .wtrrank-ghost, .wtrrank-ghost:hover { cursor: default; border-color: transparent; }
+    .wtrrank-ghost .wtrrank-bar > div { animation: wtrrank-weigh 1.4s ease-in-out infinite alternate; }
+    .wtrrank-skel { display: inline-block; height: 12px; border-radius: 4px; background: linear-gradient(90deg, #33363b 25%, #474b52 50%, #33363b 75%); background-size: 200% 100%; animation: wtrrank-shimmer 1.2s linear infinite; }
+    @keyframes wtrrank-stripe { to { background-position: 17px 0; } }
+    @keyframes wtrrank-fade { from { opacity: 0; transform: translateY(4px); } }
+    @keyframes wtrrank-weigh { from { width: 12%; } to { width: 88%; } }
+    @keyframes wtrrank-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+    @media (prefers-reduced-motion: reduce) { .wtrrank-load * { animation: none !important; transition: none !important; } }
     .wtrrank-pop { position: absolute; z-index: 2147482000; box-sizing: border-box; max-width: calc(100vw - 16px); }
     .wtrrank-pop-input { width: 100%; box-sizing: border-box; border-radius: 6px; padding: 4px 6px; font: inherit; color: inherit; }
   `);
@@ -767,11 +783,38 @@ ${refs}`;
       h('div', { class: 'wtrrank-panel', role: 'dialog', 'aria-label': title },
         h('div', { class: 'wtrrank-head' },
           h('b', {}, title),
-          onSettings && h('button', { class: 'wtrrank-icon', title: 'API settings', 'aria-label': 'API settings', onclick: onSettings }, '⚙'),
+          onSettings && h('button', { class: 'wtrrank-icon', title: 'API settings', 'aria-label': 'API settings', onclick: () => body.settings() }, '⚙'),
           h('button', { class: 'wtrrank-icon', title: 'Close', 'aria-label': 'Close', onclick: close }, '✕')),
         body));
+    body.settings = onSettings; // runRanking() swaps it when it takes over the loading panel
     document.body.append(overlay);
     return body;
+  }
+
+  // Loading view, made to feel shorter than a static text: a progress bar that slows as it nears the
+  // end, a changing step line, and the candidates "being weighed" (skeleton rows until they are known).
+  function showLoader(body, candidates, model) {
+    let box = body.querySelector('.wtrrank-load');
+    const say = () => box.children[1].replaceChildren(h('span', {}, box.steps[box.step])); // new span = fade-in again
+    if (!box) {
+      box = h('div', { class: 'wtrrank-load' }, h('div', { class: 'wtrrank-prog' }, h('div')), h('div', { class: 'wtrrank-step wtrrank-muted' }), h('div'));
+      body.replaceChildren(box);
+      const bar = box.firstChild.firstChild;
+      requestAnimationFrame(() => requestAnimationFrame(() => { bar.style.width = '92%'; })); // after a first layout, or no transition
+      const timer = setInterval(() => {
+        if (!box.isConnected) return clearInterval(timer);
+        box.step = Math.min(box.step + 1, box.steps.length - 1);
+        say();
+      }, 1400);
+    }
+    box.steps = candidates.length
+      ? ['Reading the context…', `Comparing ${candidates.length} candidates…`, 'Checking your reference terms…', `Asking ${model}…`, 'Weighing every reading…', 'Almost there…']
+      : ["Loading WTR-LAB's suggestions…"];
+    box.step = 0;
+    say();
+    box.lastChild.replaceChildren(...(candidates.length ? candidates : [0, 1, 2]).map((t, i) => h('div', { class: 'wtrrank-row wtrrank-ghost' },
+      h('div', { class: 'wtrrank-top' }, typeof t === 'string' ? h('span', { class: 'wtrrank-term' }, t) : h('span', { class: 'wtrrank-skel', style: `width:${[45, 30, 55][i]}%` })),
+      h('div', { class: 'wtrrank-bar' }, h('div', { style: `animation-duration:${1.1 + (i * 0.37) % 0.9}s;animation-delay:-${(i * 0.53) % 1.4}s` })))));
   }
 
   const sameTerm = (a, b) => !!a && !!b && a.trim() === b.trim(); // case-sensitive: "pill" and "Pill" are different terms
@@ -831,13 +874,38 @@ ${refs}`;
     pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - w - 8)) + scrollX}px`;
   }
 
-  // Open the site's tooltip for this term; with rank, scan() also presses AI Rank in it once loaded.
+  // Rank a tapped term by itself: our panel opens at once with the loading view (WTR-LAB's tooltip stays
+  // hidden behind it) and scan() presses AI Rank in the tooltip once its candidates have loaded.
+  function startAutoRank(el) {
+    const token = autoRank = { until: Date.now() + 5000 };
+    const cfg = getCfg();
+    if (!cfg.key || !cfg.model) return; // runRanking() opens the settings instead
+    const cancel = () => { if (autoRank === token) autoRank = null; };
+    token.body = openPanel(`Tier list: ${el.dataset.hash}`, () => { cancel(); openConfig(); }, () => { cancel(); closeTooltip({ trigger: el }); });
+    showLoader(token.body, [], cfg.model);
+    // The tooltip never opened (5 s), or it closed while loading and never came back (pressWhenLoaded gives up after 8 s).
+    const giveUp = (ms, stuck) => setTimeout(() => {
+      if (autoRank !== token || !stuck()) return;
+      autoRank = null;
+      token.body.replaceChildren(h('div', { class: 'wtrrank-err' }, "WTR-LAB's term tooltip did not load. Close this and tap the term again."));
+    }, ms);
+    giveUp(5000, () => !token.seen);
+    giveUp(14000, () => true);
+  }
+
+  // While the hidden tooltip loads, touches on our panel must not reach the site: its popover closes on an
+  // outside press, which would end the auto rank. Window capture runs before the site's document listeners.
+  for (const type of ['pointerdown', 'mousedown', 'touchstart']) {
+    addEventListener(type, (e) => { if (autoRank?.body && e.target.closest?.('.wtrrank-overlay')) e.stopPropagation(); }, true);
+  }
+
+  // Open the site's tooltip for this term; with rank, it is ranked like a tapped term-colored term.
   // Candidates come from that tooltip, which is why ranking goes through it.
   function viaSiteTooltip(el, rank) {
     closePop();
     bypassOnce = true;
-    el.click(); // the click handler resets autoRank, so set it after
-    if (rank) autoRank = { until: Date.now() + 5000 };
+    el.click(); // the click handler resets autoRank, so start after
+    if (rank) startAutoRank(el);
   }
 
   // Rows for the result panel.
@@ -868,8 +936,8 @@ ${refs}`;
         if (trap || x.term.toLowerCase() === popular) lockGlobal(data.hash, x.term);
         if (x.score >= CONFIDENT_SCORE) setConfident(data.hash, x.term);
         pickTerm(data, x.term);
+        closeTooltip(data); // before the overlay goes, so the tooltip it hides doesn't flash
         document.querySelector('.wtrrank-overlay')?.remove();
-        closeTooltip(data);
       };
       row.addEventListener('click', pick);
       row.addEventListener('keydown', (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), pick()));
@@ -879,13 +947,16 @@ ${refs}`;
 
   // Picks from other novels join the candidates (sorted, unmarked: the AI must not know they were chosen)
   // and only get a PREVIOUS badge in the result list.
-  async function runRanking(data) {
+  // body: the loading panel startAutoRank() opened, kept so its animation runs on without a restart.
+  async function runRanking(data, body) {
     const previous = previousPicks(data.hash);
     data = { ...data, previous, candidates: [...new Set([...data.candidates, ...previous])].sort((a, b) => a.localeCompare(b)) };
     const cfg = getCfg();
     if (!cfg.key || !cfg.model) return openConfig(() => runRanking(data));
-    const body = openPanel(`Tier list: ${data.source || data.current}`, () => openConfig(() => runRanking(data)), () => closeTooltip(data));
-    body.append(h('div', { class: 'wtrrank-muted' }, `Asking ${cfg.model}…`));
+    const onSettings = () => openConfig(() => runRanking(data));
+    if (body?.isConnected) body.settings = onSettings;
+    else body = openPanel(`Tier list: ${data.source || data.current}`, onSettings, () => closeTooltip(data));
+    showLoader(body, data.candidates, cfg.model);
     try {
       const text = await chat(cfg, SYSTEM, buildPrompt(data));
       const list = normalize(parseRanking(text, data.candidates));
