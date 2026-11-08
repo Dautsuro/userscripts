@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         WTR Glossary
 // @namespace    wtr-glossary
-// @version      1.0.0
+// @version      1.0.1
 // @description  Keeps your WTR-LAB terms in your own glossary (synced to your server) instead of the site's, so the account term limit no longer applies.
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
+// @grant        unsafeWindow
 // @connect      100.125.40.99
 // @require      http://100.125.40.99:8090/kvsync.js
 // @run-at       document-start
@@ -128,10 +129,12 @@
     }
 
     // ---------- fetch proxy ----------
-    // Runs in the page (@inject-into page), so this is the fetch the site's code calls.
-    const realFetch = window.fetch;
+    // Violentmonkey's `window` is a sandbox: assigning window.fetch would only change our own copy.
+    // unsafeWindow is the page's real window, whose fetch the site's code calls.
+    const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    const realFetch = page.fetch;
     const json = (data) => new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } });
-    window.fetch = async function (input, init) {
+    page.fetch = async function (input, init) {
       let url, method;
       try {
         const isReq = input && typeof input === 'object' && !(input instanceof URL); // a Request, maybe from another frame
