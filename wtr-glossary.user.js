@@ -12,6 +12,7 @@
 // @connect      100.125.40.99
 // @require      http://100.125.40.99:8090/kvsync.js
 // @run-at       document-start
+// @inject-into  page
 // ==/UserScript==
 
 (function () {
@@ -50,6 +51,131 @@
     else if (rest === 'terms/delete' && method === 'POST') (body?.ids || []).forEach((id) => del(String(id)));
     else return null;
     return { terms: next, changed };
+  }
+
+  if (typeof document !== 'undefined') browser();
+
+  function browser() {
+    // ---------- storage ----------
+    let terms = GM_getValue('terms', {});
+    // The reader reads user_terms_v2 when it mounts, before any request: keep it equal to our list.
+    const mirror = () => localStorage.setItem('user_terms_v2', JSON.stringify(list(terms)));
+    const save = () => { GM_setValue('terms', terms); mirror(); };
+    mirror();
+    // Another tab saved: take its map, or this tab's next write would drop that tab's terms.
+    GM_addValueChangeListener('terms', (k, o, n, remote) => { if (remote) { terms = n || {}; mirror(); } });
+
+    // ---------- sync (optional, see CLAUDE.md) ----------
+    const syncUrl = GM_getValue('syncUrl', ''), syncToken = GM_getValue('syncToken', '');
+    const kv = syncUrl && syncToken && typeof KvSync !== 'undefined'
+      ? KvSync.create({ app: 'wtr-glossary', url: syncUrl, token: syncToken }) : null;
+    const kvKey = (id) => { const k = JSON.stringify(['term', id]); return k.length <= 2000 ? k : null; };
+    function kvPut(id, t, clientUpdated) {
+      const k = kv && kvKey(id);
+      if (!k) return;
+      if (t) kv.set(k, t, clientUpdated); else kv.remove(k);
+    }
+    let firstSync = null;
+    if (kv) {
+      kv.onChange((key, value, deleted) => {
+        let id;
+        try { [, id] = JSON.parse(key); } catch (_) { return; }
+        if (typeof id !== 'string') return;
+        if (deleted) { if (!(id in terms)) return; terms = { ...terms }; delete terms[id]; }
+        else if (validTerm(value) && value[0] === id) terms = { ...terms, [id]: value };
+        else return; // anyone with admin access can edit rows: ignore what does not fit
+        save();
+      });
+      kv.start();
+      if (GM_getValue('syncResync', false)) { GM_setValue('syncResync', false); kv.resync(); }
+      firstSync = kv.syncNow();
+      GM_registerMenuCommand('WTR Glossary: resync with server', () => kv.resync());
+    }
+
+    // ---------- fetch proxy ----------
+    // Runs in the page (@inject-into page), so this is the fetch the site's code calls.
+    const realFetch = window.fetch;
+    const json = (data) => new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    window.fetch = async function (input, init) {
+      let url, method;
+      try {
+        url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, location.href);
+        method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+      } catch (_) { return realFetch.apply(this, arguments); }
+      if (url.origin !== location.origin) return realFetch.apply(this, arguments);
+      if (url.pathname.startsWith(API) && method !== 'GET') {
+        // A term write never reaches WTR-LAB, even when its body is unreadable.
+        let body = null;
+        try { body = JSON.parse(typeof init?.body === 'string' ? init.body : await input.clone().text()); } catch (_) { /* no body */ }
+        const r = handle(method, url.pathname, body, terms);
+        if (r) {
+          terms = r.terms;
+          save();
+          for (const [id, t] of r.changed) kvPut(id, t);
+        }
+        return json({ success: true, config: { terms: list(terms) } });
+      }
+      if (url.pathname === '/api/v2/user/config' && method === 'GET') {
+        const res = await realFetch.apply(this, arguments);
+        let data;
+        try { data = await res.clone().json(); } catch (_) { return res; }
+        if (!data?.success || !data.config) return res;
+        if (!GM_getValue('imported', false)) importTerms(data.config.terms);
+        if (firstSync) await Promise.race([firstSync, new Promise((ok) => setTimeout(ok, 2000))]);
+        data.config.terms = list(terms);
+        return json(data);
+      }
+      return realFetch.apply(this, arguments);
+    };
+
+    // First run on this device: copy the account's WTR-LAB terms in, at timestamp 1 so real edits win.
+    function importTerms(server) {
+      const next = { ...terms };
+      for (const raw of Array.isArray(server) ? server : []) {
+        const t = Array.isArray(raw) ? [String(raw[0]), ...raw.slice(1)] : null;
+        if (!validTerm(t) || t[0] in next) continue;
+        next[t[0]] = t;
+        kvPut(t[0], t, 1);
+      }
+      terms = next;
+      save();
+      GM_setValue('imported', true);
+    }
+
+    // ---------- settings ----------
+    function openSettings() {
+      document.getElementById('wtrg-settings')?.remove();
+      const el = (tag, props, ...kids) => { const n = Object.assign(document.createElement(tag), props); n.append(...kids); return n; };
+      const url = el('input', { value: syncUrl, placeholder: 'http://100.x.y.z:8090 (empty = no sync)' });
+      const token = el('input', { value: syncToken, type: 'password', autocomplete: 'off', placeholder: "This device's token" });
+      const st = kv?.status();
+      const status = !kv ? (syncUrl && syncToken ? 'Sync is off: the sync library did not load (server unreachable at install).' : 'Sync is off.')
+        : `Last sync: ${st.lastOkAt ? new Date(st.lastOkAt).toLocaleString() : 'not yet'}${st.lastError ? ` · error: ${st.lastError}` : ''}`;
+      const overlay = el('div', { id: 'wtrg-settings' },
+        el('style', { textContent: `#wtrg-settings{position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px}
+          #wtrg-settings form{background:#1f2125;color:#e6e6e6;border:1px solid #3a3d42;border-radius:12px;padding:16px;width:100%;max-width:420px;font:14px/1.4 system-ui,sans-serif;display:flex;flex-direction:column;gap:8px}
+          #wtrg-settings input{background:#15171a;color:inherit;border:1px solid #3a3d42;border-radius:8px;padding:10px;font:inherit}
+          #wtrg-settings button{min-height:44px;border-radius:8px;border:0;padding:0 16px;font:inherit;cursor:pointer}
+          #wtrg-settings .row{display:flex;gap:8px;justify-content:flex-end}` }),
+        el('form', { onsubmit: (e) => {
+          e.preventDefault();
+          if (url.value.trim() !== syncUrl) GM_setValue('syncResync', true); // a new server has none of our terms
+          GM_setValue('syncUrl', url.value.trim());
+          GM_setValue('syncToken', token.value.trim());
+          location.reload(); // KvSync is created at load
+        } },
+        el('b', { textContent: 'WTR Glossary settings' }),
+        el('div', { textContent: `${list(terms).length} terms in your glossary.` }),
+        el('label', { textContent: 'Sync server URL' }), url,
+        el('label', { textContent: 'Sync token' }), token,
+        el('div', { textContent: status, style: 'color:#9aa0a6' }),
+        el('div', { className: 'row' },
+          el('button', { type: 'button', textContent: 'Cancel', onclick: () => overlay.remove() }),
+          el('button', { type: 'submit', textContent: 'Save', style: 'background:#2f6b45;color:#fff' }))));
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+      document.body.append(overlay);
+    }
+    GM_registerMenuCommand('WTR Glossary settings', openSettings);
   }
 
   // ---------- self-check (node wtr-glossary.user.js) ----------
