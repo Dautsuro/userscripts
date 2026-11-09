@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR AI Terms
 // @namespace    wtr-ai-terms
-// @version      1.9.1
+// @version      1.10.0
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -791,8 +791,26 @@ ${refs}`;
     @keyframes wtrrank-scan { from { background-position: -70% 0; } to { background-position: 170% 0; } }
     @keyframes wtrrank-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
     @media (prefers-reduced-motion: reduce) { .wtrrank-load *, .wtrrank-load *::before, .wtrrank-load *::after, .wtrrank-row.in { animation: none !important; transition: none !important; } }
-    .wtrrank-pop { position: absolute; z-index: 2147482000; box-sizing: border-box; max-width: calc(100vw - 16px); }
-    .wtrrank-pop-input { width: 100%; box-sizing: border-box; border-radius: 6px; padding: 4px 6px; font: inherit; color: inherit; }
+    /* Term card for picked terms: the same panel; a bottom sheet on phone, anchored to the term on PC. */
+    .wtrrank-overlay.anchored { background: none; pointer-events: none; display: block; padding: 0; }
+    .wtrrank-overlay.anchored .wtrrank-panel { pointer-events: auto; position: absolute; width: 360px; max-width: calc(100vw - 16px); animation-name: wtrrank-fade; }
+    .wtrrank-scope { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .wtrrank-badge { font-size: 11.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; border-radius: 999px; padding: 3px 9px; color: #fff; background: #2f6fde; }
+    .wtrrank-badge.global { background: #1e7e34; }
+    .wtrrank-badge.provisional { background: #8a5a00; }
+    .wtrrank-badge.dynamic { background: #6b4fbf; }
+    .wtrrank-edit { display: flex; gap: 8px; }
+    .wtrrank-edit .wtrrank-input { flex: 1; min-width: 0; font-size: 16px; font-weight: 600; } /* 16px: no zoom-on-focus on phones */
+    .wtrrank-edit .wtrrank-action { min-height: 44px; }
+    .wtrrank-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .wtrrank-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border-radius: 999px; border: 1px solid #3a3d42; background: #15171a; color: #e6e6e6; font: inherit; font-size: 13.5px; cursor: pointer; }
+    .wtrrank-chip small { color: #8f949c; font-variant-numeric: tabular-nums; }
+    .wtrrank-chip:active { background: #2e3238; }
+    .wtrrank-chip:focus-visible { outline: 2px solid #6f9bea; outline-offset: 1px; }
+    .wtrrank-foot .wtrrank-action.danger-text { background: none; color: #e0857f; margin-right: auto; padding: 0 8px; }
+    @media (hover: hover) { .wtrrank-chip:hover { border-color: #4a7bd0; } }
+    .wtrrank-foot.wrap { flex-wrap: wrap; }
+    @media (max-width: 600px) { .wtrrank-foot .wtrrank-action.danger-text { flex: none; } .wtrrank-chip { min-height: 44px; } .wtrrank-chips { gap: 8px; } }
   `);
 
   function h(tag, props = {}, ...kids) {
@@ -874,26 +892,27 @@ ${refs}`;
   };
 
   // ---------- term popover ----------
-  // Replaces WTR-LAB's tooltip on picked terms. Classes are the site's own (Tailwind), so it follows its theme.
-  const SITE_BTN_BASE = 'inline-flex cursor-pointer shrink-0 items-center justify-center font-medium whitespace-nowrap transition-all select-none border h-7 gap-1 rounded-[min(var(--radius-md),12px)] text-[0.8rem] px-2';
-  const SITE_BTN = `${SITE_BTN_BASE} border-border bg-card hover:bg-muted hover:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50`;
-  const SITE_BTN_PRIMARY = `${SITE_BTN_BASE} border-transparent bg-primary text-primary-foreground hover:bg-primary/80`;
+  // Replaces WTR-LAB's tooltip on picked terms. Built on openPanel(), so it looks like the tier list:
+  // a bottom sheet on phone, a card next to the term on PC.
+  const PHONE = matchMedia('(max-width: 600px)'); // same breakpoint as the bottom-sheet CSS
   let pop = null;
   const closePop = () => { pop?.remove(); pop = null; };
   document.addEventListener('pointerdown', (e) => { if (pop && !pop.contains(e.target)) closePop(); }, true);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePop(); });
+  // The card would drift off its term. Not while typing: a touch keyboard opening can scroll the page.
+  addEventListener('scroll', () => pop?.classList.contains('anchored') && !pop.contains(document.activeElement) && closePop(), { passive: true });
 
   function openTermPopover(el) {
     closePop();
     const hash = el.dataset.hash, serie = currentSerie();
     const term = localTerms()[hash], local = picked[serie]?.[hash], global = globalPicks()[hash];
     const counts = pickCounts(hash);
-    const scope = termStatus[hash]?.dynamic ? 'This novel (dynamic: always checked)'
-      : local ? (global && global !== local ? `This novel (global is "${global}")` : 'This novel')
-        : !global ? `Provisional: AI gave it ≥${CONFIDENT_SCORE}% elsewhere. Save to confirm, AI Rank to check`
-          : `Global, picked in ${counts.find(([t]) => t === global)?.[1] || 0} novels`;
+    const [kind, badge, detail] = termStatus[hash]?.dynamic ? ['dynamic', 'Dynamic', 'Always checked in this novel']
+      : local ? ['', 'This novel', global && global !== local ? `Global is "${global}"` : '']
+        : !global ? ['provisional', 'Provisional', `AI gave it ≥${CONFIDENT_SCORE}% elsewhere. Save to confirm, AI Rank to check.`]
+          : ['global', 'Global', `Picked in ${counts.find(([t]) => t === global)?.[1] || 0} novels`];
     const data = { hash, source: hash };
-    const input = h('input', { class: 'wtrrank-pop-input border border-border bg-card', value: term, autocomplete: 'off', 'aria-label': 'Term' });
+    const input = h('input', { class: 'wtrrank-input', value: term, autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', 'aria-label': 'Translation' });
     const save = () => {
       const v = input.value.trim();
       // A hand fix (e.g. "Soul Masters" -> "Soul Master") also fixes the confident rendering. If novels
@@ -903,27 +922,30 @@ ${refs}`;
       closePop();
     };
     input.addEventListener('keydown', (e) => e.key === 'Enter' && save());
-    const row = (label, ...value) => h('div', { class: 'flex items-baseline gap-2' },
-      h('div', { class: 'min-w-14 px-1 font-semibold text-right text-xs shrink-0' }, label), h('div', { class: 'min-w-0 flex-1 break-words' }, ...value));
-    const others = counts.filter(([t]) => t !== term).map(([t, n]) => `${t} (${n})`).join(', ');
-    pop = h('div', { class: 'wtrrank-pop flex flex-col gap-2 rounded-lg bg-popover text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 p-2 w-80 chapter-theme', role: 'dialog', 'aria-label': `Term ${hash}` },
-      row('From', h('span', { class: 'text-muted-foreground' }, hash)),
-      row('To', input),
-      row('Scope', scope),
-      el.dataset.wtrrankOrig && row('WTR-LAB', h('span', { class: 'text-muted-foreground' }, el.dataset.wtrrankOrig)),
-      others && row('Elsewhere', h('span', { class: 'text-muted-foreground' }, others)),
-      h('div', { class: 'flex flex-wrap gap-2 justify-end' },
-        h('button', { type: 'button', class: SITE_BTN_PRIMARY, onclick: save }, 'Save'),
-        h('button', { type: 'button', class: SITE_BTN, onclick: () => viaSiteTooltip(el, true) }, '🏆 AI Rank'),
-        // Without a local pick only "hide here" makes sense: the global rendering comes from other novels.
-        h('button', { type: 'button', class: SITE_BTN, onclick: () => { pickTerm(data, local ? undefined : null); closePop(); } }, local ? 'Delete' : 'Not in this novel'),
-        h('button', { type: 'button', class: SITE_BTN, onclick: () => viaSiteTooltip(el, false) }, 'WTR-LAB')));
-    document.body.append(pop);
+    // Tap a chip to put it in the field; Save applies it.
+    const chip = (t, n) => h('button', { type: 'button', class: 'wtrrank-chip', onclick: () => { input.value = t; } }, t, n != null && h('small', { title: `Picked in ${n} novels`, 'aria-label': `picked in ${n} novels` }, String(n)));
+    const others = counts.filter(([t]) => t !== term);
+    const orig = el.dataset.wtrrankOrig;
+    const body = openPanel(`Term: ${hash}`, null, null);
+    body.append(
+      h('div', { class: 'wtrrank-scope' }, h('span', { class: `wtrrank-badge ${kind}` }, badge), detail && h('span', { class: 'wtrrank-muted' }, detail)),
+      h('div', { class: 'wtrrank-edit' }, input, h('button', { type: 'button', class: 'wtrrank-action', onclick: save }, 'Save')),
+      orig && h('div', { class: 'wtrrank-field' }, "WTR-LAB's translation", h('div', { class: 'wtrrank-chips' }, chip(orig))),
+      others.length > 0 && h('div', { class: 'wtrrank-field' }, 'Picked in other novels', h('div', { class: 'wtrrank-chips' }, others.map(([t, n]) => chip(t, n)))));
+    const panel = body.parentNode;
+    panel.append(h('div', { class: 'wtrrank-foot wrap' },
+      // Without a local pick only "hide here" makes sense: the global rendering comes from other novels.
+      h('button', { type: 'button', class: 'wtrrank-action danger-text', onclick: () => { pickTerm(data, local ? undefined : null); closePop(); } }, local ? 'Delete' : 'Not in this novel'),
+      h('button', { type: 'button', class: 'wtrrank-action secondary', onclick: () => viaSiteTooltip(el, false) }, 'WTR-LAB'),
+      h('button', { type: 'button', class: 'wtrrank-action secondary', onclick: () => viaSiteTooltip(el, true) }, '🏆 AI Rank')));
+    pop = panel.parentNode;
+    if (PHONE.matches) return;
+    pop.classList.add('anchored');
+    panel.setAttribute('aria-modal', 'false');
     // Above the term like the site's tooltip, below when there is no room; kept inside the viewport.
-    const r = el.getBoundingClientRect(), w = pop.offsetWidth, ph = pop.offsetHeight;
-    const top = r.top - ph - 6 >= 0 ? r.top - ph - 6 : r.bottom + 6;
-    pop.style.top = `${top + scrollY}px`;
-    pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - w - 8)) + scrollX}px`;
+    const r = el.getBoundingClientRect(), w = panel.offsetWidth, ph = panel.offsetHeight;
+    panel.style.top = `${r.top - ph - 8 >= 0 ? r.top - ph - 8 : Math.min(r.bottom + 8, innerHeight - ph - 8)}px`;
+    panel.style.left = `${Math.max(8, Math.min(r.left, innerWidth - w - 8))}px`;
   }
 
   // Rank a tapped term by itself: our panel opens at once with the loading view (WTR-LAB's tooltip stays
