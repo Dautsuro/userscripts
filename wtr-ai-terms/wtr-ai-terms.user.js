@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR AI Terms
 // @namespace    wtr-ai-terms
-// @version      1.10.0
+// @version      1.10.1
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -927,11 +927,11 @@ ${refs}`;
     const others = counts.filter(([t]) => t !== term);
     const orig = el.dataset.wtrrankOrig;
     const body = openPanel(`Term: ${hash}`, null, null);
-    body.append(
+    body.append(...[ // native append prints undefined/false, so drop the missing parts
       h('div', { class: 'wtrrank-scope' }, h('span', { class: `wtrrank-badge ${kind}` }, badge), detail && h('span', { class: 'wtrrank-muted' }, detail)),
       h('div', { class: 'wtrrank-edit' }, input, h('button', { type: 'button', class: 'wtrrank-action', onclick: save }, 'Save')),
       orig && h('div', { class: 'wtrrank-field' }, "WTR-LAB's translation", h('div', { class: 'wtrrank-chips' }, chip(orig))),
-      others.length > 0 && h('div', { class: 'wtrrank-field' }, 'Picked in other novels', h('div', { class: 'wtrrank-chips' }, others.map(([t, n]) => chip(t, n)))));
+      others.length > 0 && h('div', { class: 'wtrrank-field' }, 'Picked in other novels', h('div', { class: 'wtrrank-chips' }, others.map(([t, n]) => chip(t, n))))].filter(Boolean));
     const panel = body.parentNode;
     panel.append(h('div', { class: 'wtrrank-foot wrap' },
       // Without a local pick only "hide here" makes sense: the global rendering comes from other novels.
