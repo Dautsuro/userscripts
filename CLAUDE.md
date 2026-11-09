@@ -2,11 +2,15 @@
 
 Violentmonkey userscripts, run in Firefox on the user's PC and Android phone.
 
+## Layout
+
+One folder per script, named after it: `<name>/<name>.user.js` plus `<name>/README.md` (what the script does, for the user). Other versions of the same script go in the same folder (e.g. `wtr-ai-terms/wtr-ai-terms-outdated.user.js`). A new script gets its folder and README, and a row in the root README's table. Specs and plans for a script go in `<name>/docs/`, not a root `docs/`.
+
 ## Storing data: the personal sync server
 
 Scripts that need data shared between devices use the user's own PocketBase server, not just `GM_setValue`.
 Server repo and operations: `C:\Projects\databases` (see its README.md and CLAUDE.md).
-Worked example: `wtr-ai-terms.user.js` — copy its patterns.
+Worked example: `wtr-ai-terms/wtr-ai-terms.user.js` — copy its patterns.
 
 ### Header
 
@@ -50,7 +54,7 @@ Offline-first: everything works with the PC off; changes sync when it is back. C
 - Validate values coming from `onChange` before using them (anyone with admin access can edit rows); ignore what doesn't fit.
 - First run on a device with existing local data: push it with `kv.set(key, value, 1)` (timestamp 1), so real edits on any device win over old data.
 - Two tabs: if the script keeps maps in memory and saves them whole with `GM_setValue`, listen with `GM_addValueChangeListener` and refresh the in-memory copy when `remote` is true, or a stale tab overwrites synced data.
-- Many writes at once (bootstrap, reset): batch them; see `kvBatched` in the light script.
+- Many writes at once (bootstrap, reset): batch them; see `kvBatched` in `wtr-ai-terms/wtr-ai-terms.user.js`.
 
 ### Tokens
 
