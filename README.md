@@ -10,6 +10,7 @@ Violentmonkey userscripts for Firefox (PC and Android). Each script has its own 
 | [F95zone Rating Filter](f95zone-rating-filter/) | f95zone.to | Grays out games under 3.5 stars or 20 reviews |
 | [SugarCube Video Watcher](sugarcube-video-watcher/) | local games | Remembers watched videos; unwatched ones get a cover |
 | [SugarCube Cheat](sugarcube-cheat/) | local games | Cheat panel: variables, link previews, passages, undo |
+| [69shuba Translate](69shuba-translate/) | 69shuba.tw | Translates a novel's title and synopsis to English with DeepSeek |
 | [YouTube True Theater Mode](youtube-true-theater-mode/) | youtube.com | Theater mode fills the whole page |
 | [Clear Site Data](clear-site-data/) | every site | Menu button that wipes everything the site saved |
 
