@@ -1,6 +1,6 @@
 # Userscripts
 
-Violentmonkey userscripts, run in Firefox on the user's PC and Android phone.
+Violentmonkey userscripts.
 
 ## Layout
 
