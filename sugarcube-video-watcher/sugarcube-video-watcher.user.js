@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SugarCube Video Watcher
 // @namespace    sugarcube-video-watcher
-// @version      1.1.4
+// @version      1.1.5
 // @description  Local games: unwatched videos get a flashy cover, sound and controls, and play fullscreen; watched ones loop muted like GIFs. Watched list syncs through the personal server.
 // @match        file:///*
 // @grant        GM_xmlhttpRequest
@@ -24,23 +24,10 @@
   const SYNC_APP = 'sugarcube-video-watcher';
   const watched = GM_getValue('watched', {});
   const syncUrl = GM_getValue('syncUrl', ''), syncToken = GM_getValue('syncToken', '');
-  // KvSync re-saves its whole state on every set(); kvBatched() holds it in memory for bulk loops.
-  const KV_STATE = `kvsync:${SYNC_APP}`;
-  let kvBatch = null;
-  const kvStorage = {
-    get: (k, d) => (kvBatch && k === KV_STATE ? kvBatch.state : GM_getValue(k, d)),
-    set: (k, v) => { if (kvBatch && k === KV_STATE) kvBatch.state = v; else GM_setValue(k, v); },
-  };
-  function kvBatched(fn) {
-    kvBatch = { state: GM_getValue(KV_STATE, null) };
-    try { fn(); } finally {
-      const { state } = kvBatch;
-      kvBatch = null;
-      if (state) GM_setValue(KV_STATE, state);
-    }
-  }
   const kv = syncUrl && syncToken && typeof KvSync !== 'undefined'
-    ? KvSync.create({ app: SYNC_APP, url: syncUrl, token: syncToken, storage: kvStorage }) : null;
+    ? KvSync.create({ app: SYNC_APP, url: syncUrl, token: syncToken }) : null;
+  // Bulk loops save KvSync's state once. A kvsync.js cached before batch() existed runs them unbatched.
+  const kvBatched = (fn) => (kv.batch ? kv.batch(fn) : fn());
   const kvPut = (k, clientUpdated) => { if (kv && k.length <= 2000) kv.set(k, true, clientUpdated); };
 
   let gid = '';
@@ -66,8 +53,11 @@
     GM_setValue('watched', watched);
     kvPut(k);
   }
-  const positions = GM_getValue('positions', {}); // { key: seconds } where an unwatched video was left
+  // { key: seconds } where an unwatched video was left. Read fresh on every save: a tab with another
+  // game open saves its own positions, and a stale copy here would drop them.
+  const positionOf = (k) => GM_getValue('positions', {})[k];
   function savePosition(k, t) {
+    const positions = GM_getValue('positions', {});
     if (t > 0) positions[k] = t; else delete positions[k];
     GM_setValue('positions', positions);
   }
@@ -81,16 +71,24 @@
     refreshAll();
   });
 
+  // A first sync can bring hundreds of rows at once: save the map and re-check the videos once for all.
+  let remoteTimer = null;
+  function flushRemote() {
+    if (!remoteTimer) return;
+    clearTimeout(remoteTimer); remoteTimer = null;
+    GM_setValue('watched', watched);
+    refreshAll();
+  }
   function applyRemote(k, value, deleted) {
     if (!validKey(k)) return; // anyone with admin access can edit rows
     if (deleted) { if (!watched[k]) return; delete watched[k]; }
     else if (value === true) { if (watched[k]) return; watched[k] = true; }
     else return;
-    GM_setValue('watched', watched);
-    refreshAll();
+    remoteTimer ||= setTimeout(flushRemote, 100);
   }
   if (kv) {
     kv.onChange(applyRemote);
+    addEventListener('pagehide', flushRemote); // don't lose a pulled batch whose save was still pending
     kvBatched(() => {
       // First run with sync: old local data at timestamp 1, so real edits on any device win.
       if (!GM_getValue('syncBootstrapped', false)) {
@@ -161,7 +159,8 @@
       e.stopPropagation(); // the game may have a link or handler around the video
       s.mode = 'open';
       update(v);
-      if (positions[s.key]) v.currentTime = positions[s.key];
+      const pos = positionOf(s.key);
+      if (pos) v.currentTime = s.saved = pos;
       goFullscreen(v, s); // inside the click: fullscreen needs a user gesture
       v.play().catch(() => {});
     });
@@ -179,7 +178,7 @@
   // Resume point, device-local. Saved while playing: SugarCube removes the video on passage change,
   // and a detached video's pause event never reaches our listener.
   on('timeupdate', (v, s) => {
-    if (s.mode === 'open' && Math.abs(v.currentTime - (positions[s.key] || 0)) >= 1) savePosition(s.key, v.currentTime);
+    if (s.mode === 'open' && Math.abs(v.currentTime - (s.saved || 0)) >= 1) savePosition(s.key, s.saved = v.currentTime);
   });
   on('ended', (v, s) => {
     if (s.mode !== 'open') return;
@@ -273,13 +272,14 @@
       <button value="save">Save</button> <button value="">Cancel</button></form>`;
     const f = d.querySelector('form');
     f.url.value = GM_getValue('syncUrl', '');
-    f.token.value = GM_getValue('syncToken', '');
+    // The saved token is never put back into the page: the game's own scripts can read input values.
+    if (GM_getValue('syncToken', '')) f.token.placeholder = 'Saved (leave empty to keep it)';
     d.querySelector('.svw-status').textContent = kv ? syncStatusText(kv.status()) : 'Sync is off.';
     d.addEventListener('close', () => {
       if (d.returnValue === 'save') {
         if (f.url.value.trim() !== GM_getValue('syncUrl', '')) GM_setValue('syncResync', true);
         GM_setValue('syncUrl', f.url.value.trim());
-        GM_setValue('syncToken', f.token.value.trim());
+        if (f.token.value.trim() || !f.url.value.trim()) GM_setValue('syncToken', f.token.value.trim());
       }
       d.remove();
     });

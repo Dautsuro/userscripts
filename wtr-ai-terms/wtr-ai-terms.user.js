@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR AI Terms
 // @namespace    wtr-ai-terms
-// @version      1.10.1
+// @version      1.10.2
 // @description  Adds an "AI Rank" button to the term tooltip that asks an AI to score translation candidates (and propose new ones).
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -374,6 +374,7 @@ ${refs}`;
 
   let queued = false;
   new MutationObserver(() => {
+    renderTermColors(); // before the next paint: color rules exist only for terms already on the page
     if (queued) return;
     queued = true;
     setTimeout(() => { queued = false; scan(); applyLocalTerms(); syncRenderings(); renderTermColors(); }, 50); // SPA navigation, term edits, newly saved global terms
@@ -399,24 +400,11 @@ ${refs}`;
   // KvSync is undefined when the @require could not load (server down at install): the script runs unsynced.
   const SYNC_APP = 'wtr-lab-light';
   const syncUrl = GM_getValue('syncUrl', ''), syncToken = GM_getValue('syncToken', '');
-  // KvSync re-reads and re-saves its whole state through GM on every set(); inside kvBatched() that
-  // state is held in memory and written once, so bulk loops (bootstrap, reset) stay linear.
-  const KV_STATE = `kvsync:${SYNC_APP}`;
-  let kvBatch = null;
-  const kvStorage = {
-    get: (k, d) => (kvBatch && k === KV_STATE ? kvBatch.state : GM_getValue(k, d)),
-    set: (k, v) => { if (kvBatch && k === KV_STATE) kvBatch.state = v; else GM_setValue(k, v); },
-  };
-  function kvBatched(fn) {
-    kvBatch = { state: GM_getValue(KV_STATE, null) };
-    try { fn(); } finally {
-      const { state } = kvBatch;
-      kvBatch = null;
-      if (state) GM_setValue(KV_STATE, state);
-    }
-  }
+  const KV_STATE = `kvsync:${SYNC_APP}`; // KvSync's own GM key, kept by resetData()
   const kv = syncUrl && syncToken && typeof KvSync !== 'undefined'
-    ? KvSync.create({ app: SYNC_APP, url: syncUrl, token: syncToken, storage: kvStorage }) : null;
+    ? KvSync.create({ app: SYNC_APP, url: syncUrl, token: syncToken }) : null;
+  // Bulk loops (bootstrap, reset) save KvSync's state once. A kvsync.js cached before batch() existed runs them unbatched.
+  const kvBatched = (fn) => (kv.batch ? kv.batch(fn) : fn());
   // JSON array keys keep any hash text unambiguous. Hashes are raw source text: a key over KvSync's
   // 2000-char limit would throw, so such an entry stays local only (null key).
   const kvKey = (...parts) => { const k = JSON.stringify(parts); return k.length <= 2000 ? k : null; };
@@ -547,14 +535,15 @@ ${refs}`;
     for (const h of Object.keys(globalPicks())) hashes.add(h); // global picks need no check in new novels
     return hashes;
   }
+  // Rules only for terms on the page now: one per term ever checked would grow without end.
   function renderTermColorsUnsafe() {
-    const hashes = checkedHashes();
+    const onPage = new Set([...document.querySelectorAll('.chapter-body .text-patch[data-hash]')].map((el) => el.dataset.hash));
     const sel = (h) => {
       const attr = `[data-hash="${cssString(h)}"]`;
       return [`.chapter-body .text-patch:not(#wtrrank)${attr}`, `.chapter-body span:not(.text-patch):has(> .text-patch${attr})`];
     };
-    const done = [...hashes].flatMap(sel);
-    const provisional = Object.keys(provisionalPicks()).flatMap(sel);
+    const done = [...checkedHashes()].filter((h) => onPage.has(h)).flatMap(sel);
+    const provisional = Object.keys(provisionalPicks()).filter((h) => onPage.has(h)).flatMap(sel);
     const css = '.chapter-body .text-patch:not(#wtrrank), .chapter-body span:not(.text-patch):has(> .text-patch) { color: var(--wtr-term-color) !important; }'
       + (done.length ? `\n${done.join(',\n')} { color: inherit !important; }` : '')
       + (provisional.length ? `\n${provisional.join(',\n')} { color: #d39b2a !important; }` : ''); // after "done": same specificity, so it wins
@@ -1045,8 +1034,9 @@ ${refs}`;
   function openConfig(after) {
     const cfg = getCfg();
     const body = openPanel('WTR AI Terms settings');
-    const keyIn = h('input', { class: 'wtrrank-input', type: 'password', autocomplete: 'off', placeholder: 'sk-ant-… / sk-… / sk-or-… / AIza… / gsk_… / xai-…' });
-    keyIn.value = cfg.key;
+    // Saved secrets are never put back into the page: its own scripts can read input values.
+    const keyIn = h('input', { class: 'wtrrank-input', type: 'password', autocomplete: 'off', placeholder: cfg.key ? 'Saved (leave empty to keep it)' : 'sk-ant-… / sk-… / sk-or-… / AIza… / gsk_… / xai-…' });
+    const keyVal = () => keyIn.value.trim() || cfg.key;
     const status = h('div', { class: 'wtrrank-muted' });
     const select = h('select', { class: 'wtrrank-input' });
     const manual = h('input', { class: 'wtrrank-input', placeholder: 'Model name (used if not empty)' });
@@ -1054,19 +1044,19 @@ ${refs}`;
     let shownPid = detectProvider(cfg.key)?.id; // the provider whose saved model the fields show
     const syncUrlIn = h('input', { class: 'wtrrank-input', autocomplete: 'off', placeholder: 'http://100.x.y.z:8090 (empty = no sync)' });
     syncUrlIn.value = GM_getValue('syncUrl', '');
-    const syncTokenIn = h('input', { class: 'wtrrank-input', type: 'password', autocomplete: 'off', placeholder: 'This device\'s token' });
-    syncTokenIn.value = GM_getValue('syncToken', '');
+    const savedToken = GM_getValue('syncToken', '');
+    const syncTokenIn = h('input', { class: 'wtrrank-input', type: 'password', autocomplete: 'off', placeholder: savedToken ? 'Saved (leave empty to keep it)' : 'This device\'s token' });
 
     async function load() {
-      const p = detectProvider(keyIn.value), chosen = select.value;
+      const p = detectProvider(keyVal()), chosen = select.value;
       status.className = 'wtrrank-muted'; // undo a Save error's red
       select.replaceChildren();
-      if (!p) { status.textContent = keyIn.value ? 'Unrecognized key format.' : ''; return; }
+      if (!p) { status.textContent = keyVal() ? 'Unrecognized key format.' : ''; return; }
       let want = manual.value.trim() || chosen; // Reload models keeps what was chosen
       if (p.id !== shownPid) { shownPid = p.id; want = manual.value = savedModel(p.id); }
       status.textContent = `Detected ${p.name}. Loading models…`;
       try {
-        const models = await listModels(keyIn.value.trim());
+        const models = await listModels(keyVal());
         select.append(h('option', { value: '' }, '— choose a model —'));
         for (const m of models) {
           const o = h('option', { value: m.id }, `${m.warn ? '⚠ ' : ''}${m.label}`);
@@ -1111,17 +1101,21 @@ ${refs}`;
         type: 'button',
         class: 'wtrrank-action',
         onclick: () => {
-          const model = manual.value.trim() || select.value, p = detectProvider(keyIn.value);
-          if (!p) return fail('Unrecognized key format.');
-          if (!model) return fail('Choose or type a model.');
-          GM_setValue('apiKey', keyIn.value.trim());
-          if (model !== savedModel(p.id)) kvPut(['model', p.id], model);
-          GM_setValue(`model:${p.id}`, model);
-          if (syncUrlIn.value.trim() !== GM_getValue('syncUrl', '')) GM_setValue('syncResync', true);
-          GM_setValue('syncUrl', syncUrlIn.value.trim());
-          GM_setValue('syncToken', syncTokenIn.value.trim());
+          // No key at all is fine (e.g. a new device set up for sync first); a key needs a model.
+          const key = keyVal(), model = manual.value.trim() || select.value, p = detectProvider(key);
+          if (key && !p) return fail('Unrecognized key format.');
+          if (p && !model) return fail('Choose or type a model.');
+          if (p) {
+            GM_setValue('apiKey', key);
+            if (model !== savedModel(p.id)) kvPut(['model', p.id], model);
+            GM_setValue(`model:${p.id}`, model);
+          }
+          const url = syncUrlIn.value.trim();
+          if (url !== GM_getValue('syncUrl', '')) GM_setValue('syncResync', true);
+          GM_setValue('syncUrl', url);
+          if (syncTokenIn.value.trim() || !url) GM_setValue('syncToken', syncTokenIn.value.trim());
           document.querySelector('.wtrrank-overlay')?.remove();
-          if (after) after();
+          if (after && p) after(); // with no key, ranking would only reopen these settings
         },
       }, 'Save')));
     if (cfg.key) load();

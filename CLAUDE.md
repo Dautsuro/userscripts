@@ -40,6 +40,7 @@ kv.onChange((key, value, deleted) => {})  // only for changes coming from the se
 kv.start()               // sync now, every 60 s, on focus/online
 kv.resync()              // re-push everything (after a server restore or URL change)
 kv.status()              // { lastOkAt, lastError } — show it in the settings dialog
+kv.batch(fn)             // fn runs synchronously; KvSync's state is saved once at the end
 ```
 
 Offline-first: everything works with the PC off; changes sync when it is back. Conflict rule: per key, the latest change wins.
@@ -50,11 +51,11 @@ Offline-first: everything works with the PC off; changes sync when it is back. C
 - Keys are small, one per entry, never a whole map in one key (latest-wins would erase the other device's entries). Build keys as JSON arrays: `JSON.stringify(['checked', novelId, hash])`. Max 2000 chars: `set` throws above that, so check the length first and keep the entry local-only.
 - Sync is optional: with no URL/token, or if `KvSync` failed to load, the script must behave exactly as without sync (`kv` is `null`; guard every call).
 - Never sync device-local settings: `syncUrl`, `syncToken`, API keys.
-- Settings dialog: add "Sync server URL" and "Sync token" fields stored with `GM_setValue('syncUrl'/'syncToken')`, plus the `kv.status()` line. Add a "resync with server" menu command when sync is on.
+- Settings dialog: add "Sync server URL" and "Sync token" fields stored with `GM_setValue('syncUrl'/'syncToken')`, plus the `kv.status()` line. Add a "resync with server" menu command when sync is on. Never put a saved token or API key back into a field (page scripts can read it): show "Saved (leave empty to keep it)" as placeholder and keep the old value when the field is left empty.
 - Validate values coming from `onChange` before using them (anyone with admin access can edit rows); ignore what doesn't fit.
 - First run on a device with existing local data: push it with `kv.set(key, value, 1)` (timestamp 1), so real edits on any device win over old data.
 - Two tabs: if the script keeps maps in memory and saves them whole with `GM_setValue`, listen with `GM_addValueChangeListener` and refresh the in-memory copy when `remote` is true, or a stale tab overwrites synced data.
-- Many writes at once (bootstrap, reset): batch them; see `kvBatched` in `wtr-ai-terms/wtr-ai-terms.user.js`.
+- Many writes at once (bootstrap, reset): wrap them in `kv.batch(fn)`. A device can still have a kvsync.js cached from before `batch` existed, so call it as `kv.batch ? kv.batch(fn) : fn()` (see `kvBatched` in `wtr-ai-terms/wtr-ai-terms.user.js`). Batch the saves of your own maps for pulled rows too (`flushRemote` there).
 
 ### Tokens
 

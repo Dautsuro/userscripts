@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         F95zone Rating Filter
 // @namespace    f95zone-rating-filter
-// @version      1.3.0
+// @version      1.3.1
 // @description  On Latest Updates, grays out games under 3.5 stars or with fewer than 20 reviews.
 // @match        https://f95zone.to/sam/latest_alpha/*
 // @grant        none
@@ -110,10 +110,11 @@
       const { id, tiles } = queue.shift();
       if (!(id in cache)) {
         try { cache[id] = [await fetchReviews(id), Date.now()]; saveCache(); }
-        catch (e) { console.warn('[f95rf] thread', id, e); continue; }
+        catch (e) { console.warn('[f95rf] thread', id, e); }
       }
-      tiles.forEach(t => mark(t, cache[id][0]));
-      await new Promise(r => setTimeout(r, 250));
+      if (id in cache) tiles.forEach(t => mark(t, cache[id][0]));
+      await new Promise(r => setTimeout(r, 250)); // after a failure too: a 429 must not set off a burst
+
     }
     showLoading(0);
     running = false;

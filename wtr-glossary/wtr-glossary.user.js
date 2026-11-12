@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WTR Glossary
 // @namespace    wtr-glossary
-// @version      1.0.1
+// @version      1.0.2
 // @description  Keeps your WTR-LAB terms in your own glossary (synced to your server) instead of the site's, so the account term limit no longer applies.
 // @match        https://wtr-lab.com/*
 // @grant        GM_xmlhttpRequest
@@ -83,24 +83,10 @@
 
     // ---------- sync (optional, see CLAUDE.md) ----------
     const syncUrl = GM_getValue('syncUrl', ''), syncToken = GM_getValue('syncToken', '');
-    // KvSync re-reads and re-saves its whole state on every set(); inside kvBatched() that state is
-    // held in memory and written once, so bulk loops (import, bootstrap) stay linear.
-    const KV_STATE = 'kvsync:wtr-glossary';
-    let kvBatch = null;
-    const kvStorage = {
-      get: (k, d) => (kvBatch && k === KV_STATE ? kvBatch.state : GM_getValue(k, d)),
-      set: (k, v) => { if (kvBatch && k === KV_STATE) kvBatch.state = v; else GM_setValue(k, v); },
-    };
-    function kvBatched(fn) {
-      kvBatch = { state: GM_getValue(KV_STATE, null) };
-      try { fn(); } finally {
-        const { state } = kvBatch;
-        kvBatch = null;
-        if (state) GM_setValue(KV_STATE, state);
-      }
-    }
     const kv = syncUrl && syncToken && typeof KvSync !== 'undefined'
-      ? KvSync.create({ app: 'wtr-glossary', url: syncUrl, token: syncToken, storage: kvStorage }) : null;
+      ? KvSync.create({ app: 'wtr-glossary', url: syncUrl, token: syncToken }) : null;
+    // Bulk loops (import, bootstrap) save KvSync's state once. A kvsync.js cached before batch() existed runs them unbatched.
+    const kvBatched = (fn) => (kv?.batch ? kv.batch(fn) : fn());
     const kvKey = (id) => { const k = JSON.stringify(['term', id]); return k.length <= 2000 ? k : null; };
     function kvPut(id, t, clientUpdated) {
       const k = kv && kvKey(id);
