@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Local Game Videos
 // @namespace    local-game-videos
-// @version      1.1.0
+// @version      1.2.0
 // @description  Local HTML games: unseen videos are covered until you click (then play fullscreen); watched videos loop muted like a GIF. Watched state is shared by every version of a game.
 // @match        file:///*
 // @grant        GM_xmlhttpRequest
@@ -96,10 +96,10 @@
         top: anchor(top) !important; left: anchor(left) !important;
         width: anchor-size(width) !important; height: anchor-size(height) !important;
         display: block !important; overflow: hidden; container-type: size;
-        background: #121214 !important; /* opaque even if the inside fails to draw */
+        background: #ffc400 !important; /* opaque even if the inside fails to draw */
         cursor: pointer; pointer-events: auto !important;
       }
-      .lgv-block:focus-visible { outline: 2px solid #fff; outline-offset: -4px; }
+      .lgv-block:focus-visible { outline: 3px solid #111; outline-offset: -10px; }
       video.${PLAYING}:fullscreen, video.${PLAYING}::backdrop { cursor: none !important; }
     `;
     document.documentElement.append(style);
@@ -147,21 +147,21 @@
       .wrap {
         position: absolute; inset: 0; display: flex; flex-direction: column;
         align-items: center; justify-content: center; gap: clamp(4px, 4cqmin, 14px);
-        background:
-          repeating-linear-gradient(135deg, rgba(255,255,255,.035) 0 12px, transparent 12px 24px),
-          radial-gradient(circle at 50% 42%, #2a2a30 0%, #121214 72%);
-        color: #fff; font: 600 clamp(12px, 5.5cqmin, 17px)/1.3 system-ui, sans-serif;
+        /* Amber with a dark frame: a colour block that stands out on dark and light game themes,
+           even blurred by scrolling. */
+        box-sizing: border-box; border: clamp(3px, 2cqmin, 6px) solid #111; border-radius: inherit;
+        background: repeating-linear-gradient(135deg, #ffc400 0 16px, #f0ae00 16px 32px);
+        color: #111; font: 700 clamp(12px, 5.5cqmin, 18px)/1.3 system-ui, sans-serif;
         text-align: center; user-select: none;
       }
       .play {
         width: clamp(34px, 24cqmin, 72px); aspect-ratio: 1; flex: none; border-radius: 50%;
-        display: grid; place-items: center;
-        background: rgba(255,255,255,.12); border: 1.5px solid rgba(255,255,255,.6);
+        display: grid; place-items: center; background: #111;
         transition: transform .18s ease-out, background-color .18s ease-out;
       }
-      svg { width: 40%; height: 40%; fill: #fff; margin-left: 7%; }
-      .hint { font-weight: 400; font-size: .82em; color: rgba(255,255,255,.7); }
-      :host(:hover) .play, :host(:focus-visible) .play { transform: scale(1.07); background: rgba(255,255,255,.24); }
+      svg { width: 40%; height: 40%; fill: #ffc400; margin-left: 7%; }
+      .hint { font-weight: 500; font-size: .82em; color: #3a2c00; }
+      :host(:hover) .play, :host(:focus-visible) .play { transform: scale(1.07); background: #000; }
       :host(:active) .play { transform: scale(.95); transition-duration: .08s; }
       @container (max-height: 120px), (max-width: 170px) { .hint { display: none; } }
       @container (max-height: 80px), (max-width: 100px) { .title { display: none; } }
