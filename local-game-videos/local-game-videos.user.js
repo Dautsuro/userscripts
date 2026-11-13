@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Local Game Videos
 // @namespace    local-game-videos
-// @version      1.0.0
+// @version      1.0.1
 // @description  Local HTML games: unseen videos are covered until you click (then play fullscreen); watched videos loop muted like a GIF. Watched state is shared by every version of a game.
 // @match        file:///*
 // @grant        GM_xmlhttpRequest
@@ -90,7 +90,8 @@
     const style = document.createElement('style');
     style.textContent = `
       .lgv-block {
-        box-sizing: border-box; z-index: 1; margin: 0; padding: 0; border: 0;
+        /* 99: above a game's own player drawn over the video, below its top bar and dialogs */
+        box-sizing: border-box; z-index: 99; margin: 0; padding: 0; border: 0;
         position: absolute !important;
         top: anchor(top) !important; left: anchor(left) !important;
         width: anchor-size(width) !important; height: anchor-size(height) !important;
@@ -108,6 +109,14 @@
     document.addEventListener('play', (e) => {
       const st = states.get(e.target);
       if (st && st.mode === 'blocked') e.target.pause(); // the game started it
+    }, true);
+    document.addEventListener('pause', (e) => {
+      const video = e.target, st = states.get(video);
+      // A game that manages its clips can pause one it did not start itself: start it again.
+      // At most 5 times per click, so the two never loop.
+      if (!st || st.mode !== 'playing' || video.ended || ++st.resumes > 5) return;
+      log('paused from outside, resuming', st.key);
+      video.play().catch((err) => log('resume failed', err));
     }, true);
     document.addEventListener('volumechange', (e) => {
       const st = states.get(e.target);
@@ -177,6 +186,7 @@
       st.block = null;
     }, { once: true });
     st.mode = 'playing';
+    st.resumes = 0;
     active = video;
     video.currentTime = 0;
     video.loop = false;  // again: the game may have reset them since the block went up
