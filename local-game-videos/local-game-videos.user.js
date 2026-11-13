@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Local Game Videos
 // @namespace    local-game-videos
-// @version      1.2.0
+// @version      1.2.1
 // @description  Local HTML games: unseen videos are covered until you click (then play fullscreen); watched videos loop muted like a GIF. Watched state is shared by every version of a game.
 // @match        file:///*
 // @grant        GM_xmlhttpRequest
@@ -222,7 +222,7 @@
     st.mode = 'playing';
     st.resumes = 0;
     active = video;
-    video.currentTime = 0;
+    // currentTime is left alone: a video left before its end resumes where it stopped.
     video.loop = false;  // again: the game may have reset them since the block went up
     video.muted = false;
     video.controls = false;
