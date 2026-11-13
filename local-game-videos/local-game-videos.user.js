@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Local Game Videos
 // @namespace    local-game-videos
-// @version      1.0.1
+// @version      1.1.0
 // @description  Local HTML games: unseen videos are covered until you click (then play fullscreen); watched videos loop muted like a GIF. Watched state is shared by every version of a game.
 // @match        file:///*
 // @grant        GM_xmlhttpRequest
@@ -95,9 +95,9 @@
         position: absolute !important;
         top: anchor(top) !important; left: anchor(left) !important;
         width: anchor-size(width) !important; height: anchor-size(height) !important;
-        display: flex !important; align-items: center; justify-content: center;
-        background: #000 !important; color: #fff !important;
-        font: 16px sans-serif; cursor: pointer; pointer-events: auto !important;
+        display: block !important; overflow: hidden; container-type: size;
+        background: #121214 !important; /* opaque even if the inside fails to draw */
+        cursor: pointer; pointer-events: auto !important;
       }
       .lgv-block:focus-visible { outline: 2px solid #fff; outline-offset: -4px; }
       video.${PLAYING}:fullscreen, video.${PLAYING}::backdrop { cursor: none !important; }
@@ -141,6 +141,38 @@
     });
   }
 
+  // Sizes follow the block (cqmin), so it reads on a 200px clip and on a full-width one.
+  const COVER_HTML = `
+    <style>
+      .wrap {
+        position: absolute; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: clamp(4px, 4cqmin, 14px);
+        background:
+          repeating-linear-gradient(135deg, rgba(255,255,255,.035) 0 12px, transparent 12px 24px),
+          radial-gradient(circle at 50% 42%, #2a2a30 0%, #121214 72%);
+        color: #fff; font: 600 clamp(12px, 5.5cqmin, 17px)/1.3 system-ui, sans-serif;
+        text-align: center; user-select: none;
+      }
+      .play {
+        width: clamp(34px, 24cqmin, 72px); aspect-ratio: 1; flex: none; border-radius: 50%;
+        display: grid; place-items: center;
+        background: rgba(255,255,255,.12); border: 1.5px solid rgba(255,255,255,.6);
+        transition: transform .18s ease-out, background-color .18s ease-out;
+      }
+      svg { width: 40%; height: 40%; fill: #fff; margin-left: 7%; }
+      .hint { font-weight: 400; font-size: .82em; color: rgba(255,255,255,.7); }
+      :host(:hover) .play, :host(:focus-visible) .play { transform: scale(1.07); background: rgba(255,255,255,.24); }
+      :host(:active) .play { transform: scale(.95); transition-duration: .08s; }
+      @container (max-height: 120px), (max-width: 170px) { .hint { display: none; } }
+      @container (max-height: 80px), (max-width: 100px) { .title { display: none; } }
+      @media (prefers-reduced-motion: reduce) { .play { transition: none; } }
+    </style>
+    <div class="wrap" aria-hidden="true">
+      <span class="play"><svg viewBox="0 0 24 24"><path d="M6 3.5v17a1 1 0 0 0 1.5.86l14-8.5a1 1 0 0 0 0-1.72l-14-8.5A1 1 0 0 0 6 3.5z"/></svg></span>
+      <span class="title">Unseen video</span>
+      <span class="hint">Click to play in fullscreen</span>
+    </div>`;
+
   const srcOf = (video) => video.getAttribute('src')
     ? video.src
     : (video.querySelector('source[src]:not([src=""])') || {}).src || '';
@@ -160,7 +192,9 @@
     cover.className = 'lgv-block';
     cover.setAttribute('role', 'button');
     cover.tabIndex = 0;
-    cover.textContent = '▶ Click to play';
+    cover.setAttribute('aria-label', 'Play unseen video in fullscreen');
+    cover.attachShadow({ mode: 'open' }).innerHTML = COVER_HTML; // shadow: the game's CSS cannot reach in
+    cover.style.borderRadius = getComputedStyle(video).borderRadius;
     cover.style.positionAnchor = video.style.anchorName;
     const onActivate = (e) => {
       if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return;
